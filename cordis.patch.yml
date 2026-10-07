@@ -1,0 +1,4 @@
+- insert:
+    - id: copylee-academic
+      name: '@copylee/dsh-academic'
+      config: {}
