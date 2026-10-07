@@ -10,6 +10,18 @@ DeepSeek Harness 的学术插件，三部分：
 
 全部用 TypeScript 实现，不需要 Python，也不需要另装 MCP 服务。所有检索源都可以不填密钥使用。
 
+![论文检索：工具结果里的论文卡片（标题、作者、年份、期刊、被引数、开放获取标记），下方是回答](assets/paper-search.png)
+
+截图中回答里的引用角标由 [dsh-better-display](https://github.com/copylee711/dsh-better-display) 渲染；不装它时引用显示为普通链接。
+
+| 核验参考文献 | 整理 Zotero 里的 PDF 批注 |
+|---|---|
+| ![逐字段核对两条参考文献，指出其中一条的 DOI 属于另一篇文章](assets/reference-verify.png) | ![在 Zotero 文库中检索，并把 PDF 高亮批注按主题整理成要点，带页码](assets/zotero-annotations.png) |
+
+| 输入框里用斜杠调用技能 | 设置页 |
+|---|---|
+| ![输入 /academic 列出内置技能](assets/skills.png) | ![设置 → 学术：Zotero 连接状态与开关、论文检索数据源](assets/settings.png) |
+
 ## 功能
 
 ### Zotero
