@@ -32,7 +32,7 @@ interface ClientContext {
 }
 
 interface CloudStatus { configured: boolean; ok?: boolean; username?: string; library?: boolean; write?: boolean; files?: boolean; items?: number; error?: string }
-interface Status { ok: boolean; error?: string; zotero?: { running: boolean; writable: boolean; version?: string; items?: number; error?: string }; cloud?: CloudStatus; program?: boolean; startError?: string; skills?: Array<{ name: string; description: string }>; skillsRegistered?: boolean }
+interface Status { ok: boolean; error?: string; zotero?: { running: boolean; writable: boolean; version?: string; items?: number; error?: string }; cloud?: CloudStatus; program?: boolean; browser?: string; startError?: string; skills?: Array<{ name: string; description: string }>; skillsRegistered?: boolean }
 
 const SKILL_LABELS: Record<string, string> = {
   'academic-literature-review': '文献综述',
@@ -51,7 +51,8 @@ const SKILL_LABELS: Record<string, string> = {
 const STYLES = [['apa', 'APA'], ['ieee', 'IEEE'], ['nature', 'Nature'], ['chicago-author-date', 'Chicago'], ['china-national-standard-gb-t-7714-2015-numeric', 'GB/T 7714']] as const
 const CHUNKS = [6_000, 12_000, 24_000, 48_000]
 const LIMITS = [10, 20, 50, 100]
-const SOURCES = [['arxiv', 'arXiv'], ['openalex', 'OpenAlex'], ['crossref', 'Crossref'], ['semanticscholar', 'Semantic Scholar'], ['pubmed', 'PubMed'], ['europepmc', 'Europe PMC'], ['dblp', 'DBLP']] as const
+const SOURCES = [['arxiv', 'arXiv'], ['openalex', 'OpenAlex'], ['crossref', 'Crossref'], ['semanticscholar', 'Semantic Scholar'], ['pubmed', 'PubMed'], ['europepmc', 'Europe PMC'], ['dblp', 'DBLP'], ['cnki', '知网'], ['googlescholar', 'Google Scholar']] as const
+const BROWSER_SOURCES: readonly string[] = ['cnki', 'googlescholar']
 const PAPER_CARD_TOOLS = ['paper_search', 'paper_get', 'paper_citations']
 
 const h = React.createElement
@@ -188,7 +189,7 @@ function AcademicSection({ ctx }: { ctx: ClientContext }) {
       setMessage({ kind: 'error', text: `保存失败：${(error as Error).message}` })
     }
     await load()
-    if (['zoteroBaseUrl', 'zoteroLibrary', 'zoteroSource', 'zoteroApiKey', 'zoteroPath', 'zoteroAutoStart'].includes(key)) void refreshStatus()
+    if (['zoteroBaseUrl', 'zoteroLibrary', 'zoteroSource', 'zoteroApiKey', 'zoteroPath', 'zoteroAutoStart', 'browser', 'browserPath'].includes(key)) void refreshStatus()
   }
 
   if (!loaded) return h('div', { style: S.page }, '加载中…')
@@ -242,16 +243,21 @@ function AcademicSection({ ctx }: { ctx: ClientContext }) {
       row('启用论文工具', '多源检索论文、查看论文详情与引用关系、阅读开放获取的全文（arXiv、PubMed Central、开放获取 PDF）、从 DOI 注册机构获取引文、核验参考文献是否真实存在。关闭后 AI 看不到这些工具。',
         h(Switch, { checked: settings.papers, disabled, label: '启用论文工具', onChange: value => { void change('papers', value) } })),
       h('div', { style: { display: 'grid', gap: 8 } },
-        h('div', { style: S.toggleText }, '默认数据源', h('span', { style: { ...S.hint, fontWeight: 400 } }, '检索时同时查询选中的数据源，同一篇论文只返回一次；AI 也可以按需指定其中几个。全部无需密钥。Semantic Scholar 不填密钥时经常被限流，届时自动跳过。DBLP 在部分网络下会要求浏览器验证而无法使用，默认不选。')),
+        h('div', { style: S.toggleText }, '默认数据源', h('span', { style: { ...S.hint, fontWeight: 400 } }, '检索时同时查询选中的数据源，同一篇论文只返回一次；AI 也可以按需指定其中几个。全部无需密钥。Semantic Scholar 不填密钥时经常被限流，届时自动跳过。DBLP 在部分网络下会要求浏览器验证而无法使用，默认不选。知网和 Google Scholar 通过浏览器检索，每次几秒到十几秒，默认不选；不选时 AI 仍可在需要时点名使用。')),
         h('div', { style: S.chips }, SOURCES.map(([id, label]) => {
           const on = settings.sources.includes(id)
           return h('button', {
-            key: id, type: 'button', disabled: disabled || !settings.papers, 'aria-pressed': on,
+            key: id, type: 'button', disabled: disabled || !settings.papers || (BROWSER_SOURCES.includes(id) && !settings.browser), 'aria-pressed': on,
             onClick: () => { void change('sources', on ? settings.sources.filter(source => source !== id) : [...settings.sources, id]) },
             style: { ...S.secondary, ...(on ? chosen : {}) },
           }, label)
         })),
       ),
+      row('用浏览器检索知网和 Google Scholar', `这两个网站不向程序开放接口。开启后，AI 点名使用它们、或核验参考文献时在其他数据源都查不到时，插件会在屏幕外打开一个独立的 Chrome / Edge 窗口（任务栏上会多一个浏览器图标），像人一样打开网站检索，跟随系统代理设置，10 分钟不用后自动关闭。它用自己的浏览器配置，不读取你平时浏览器里的登录和记录。网站要求人机验证时，窗口会显示到屏幕上等你完成（最多 2 分钟），插件不会自动通过验证。知网能查到题录；全文是否可下载取决于你的网络是否有机构权限。${status?.browser ? ` 当前使用：${status.browser}。` : settings.browser && status !== null && status.ok ? ' 没有找到 Chrome 或 Edge，请在下面填写路径。' : ''}`,
+        h(Switch, { checked: settings.browser, disabled: disabled || !settings.papers, label: '用浏览器检索知网和 Google Scholar', onChange: value => { void change('browser', value) } })),
+      settings.browser && status !== null && status.ok && !status.browser
+        ? row('浏览器程序路径', 'chrome.exe 或 msedge.exe 的完整路径（macOS 为应用包内的可执行文件）。', h(TextField, { value: settings.browserPath, disabled, placeholder: '自动查找', onCommit: value => { void change('browserPath', value) } }))
+        : null,
       row('联系邮箱（可选）', 'Crossref、OpenAlex、NCBI、Europe PMC、Unpaywall 希望调用方留一个联系邮箱，留了限速更宽松。填写后，查找开放获取全文时才会询问 Unpaywall。邮箱只发给这五家。', h(TextField, { value: settings.email, disabled, placeholder: 'you@example.org', onCommit: value => { void change('email', value) } })),
       row('Semantic Scholar API Key（可选）', '在 semanticscholar.org 免费申请。填写后可稳定获得一句话摘要和引用数。', h(TextField, { value: settings.s2Key, disabled, secret: true, placeholder: '未填写', onCommit: value => { void change('s2Key', value) } })),
       row('OpenAlex API Key（可选）', '不填时使用匿名额度，一般够用。', h(TextField, { value: settings.openalexKey, disabled, secret: true, placeholder: '未填写', onCommit: value => { void change('openalexKey', value) } })),

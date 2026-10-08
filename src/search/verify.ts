@@ -4,7 +4,8 @@
  * first author and year agree, has the work been retracted. Catches the
  * references a language model makes up.
  */
-import { titleKey } from './paper.js'
+import { HumanCheckError } from '../browser/sites.js'
+import { titleKey, type Paper } from './paper.js'
 import { crossrefMatch, crossrefWork, SEARCHERS, type CrossrefWork, type Reach } from '../sources/indexes.js'
 import { doiOf, type Csl } from '../zotero/csl.js'
 
@@ -70,7 +71,64 @@ const matchedOf = (record: Record_): NonNullable<Checked['matched']> => ({
   ...(record.year === undefined ? {} : { year: record.year }), ...(record.venue === undefined ? {} : { venue: record.venue }), ...(record.doi === undefined ? {} : { doi: record.doi }),
 })
 
-export async function verifyReference(reference: string, reach: Reach): Promise<Checked> {
+/** How many more references may be looked up through the browser in this call; those lookups are slow. */
+export interface Budget { browser: number }
+
+const HAS_CJK = /[\u3400-\u9fff]/
+/** Letters and digits only, so punctuation and spacing do not decide a match. */
+const squash = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+
+/** The title in a Chinese reference: what stands before the type mark `[J]`, else the longest Chinese part. */
+export function cjkTitle(reference: string): string | undefined {
+  const marked = /(?:^|[.．。]\s*)([^.．。\[\]]{4,120}?)\s*\[[A-Z]{1,2}(?:\/[A-Z]{2})?\]/.exec(reference)?.[1]?.trim()
+  if (marked !== undefined && HAS_CJK.test(marked)) return marked
+  return reference.split(/[.．。]\s*|["“”《》]/).map(part => part.trim()).filter(part => HAS_CJK.test(part) && squash(part).length >= 6 && (part.match(/[,，;；]/g)?.length ?? 0) < 2 && !/(19|20)\d{2}/.test(part))
+    .sort((a, b) => b.length - a.length)[0]
+}
+
+/**
+ * Last resort for a reference no index knows: look for it where a reader would, in the plugin's
+ * browser. A reference in Chinese goes to CNKI, any other to Google Scholar.
+ */
+async function viaBrowser(reference: string, reach: Reach, budget: Budget | undefined): Promise<Checked | 'none' | 'skipped'> {
+  if (reach.browser === undefined || budget === undefined || budget.browser <= 0) return 'skipped'
+  const chinese = HAS_CJK.test(reference)
+  const title = chinese ? cjkTitle(reference) : likelyTitles(reference)[0]
+  if (title === undefined) return 'skipped'
+  budget.browser--
+  let hits: Paper[]
+  try {
+    hits = await SEARCHERS[chinese ? 'cnki' : 'googlescholar']({ query: chinese ? title : `"${title.replace(/"/g, '')}"`, limit: 12, sort: 'relevance' }, reach)
+  } catch (error) {
+    // Nobody is at the screen to answer the check: do not put the window up again for every reference left.
+    if (error instanceof HumanCheckError) budget.browser = 0
+    throw error
+  }
+  const whole = squash(reference)
+  // The same title is often several records (the paper, a reprint, a digest): keep the one that agrees best.
+  let best: Checked | undefined
+  for (const paper of hits) {
+    const name = squash(paper.title)
+    const same = chinese ? name.length >= 6 && (name === squash(title) || whole.includes(name)) : titleOverlap(paper.title, reference) >= 0.85 && titleOverlap(title, paper.title) >= 0.85
+    if (!same) continue
+    const notes: string[] = []
+    const first = paper.authors[0]
+    // Google Scholar writes "A Vaswani": the family name is the last word.
+    const family = first === undefined ? undefined : chinese ? first : first.split(' ').at(-1)
+    if (family !== undefined && !whole.includes(squash(family))) notes.push(`first author "${first!}" is not in the reference`)
+    const years = [...reference.matchAll(/(?<!\d)(19|20)\d{2}(?!\d)/g)].map(match => Number(match[0]))
+    if (paper.year !== undefined && years.length > 0 && !years.some(year => Math.abs(year - paper.year!) <= 1)) notes.push(`year differs: the record says ${String(paper.year)}`)
+    const checked: Checked = {
+      reference, verdict: notes.length === 0 ? 'verified' : 'check', notes,
+      matched: { title: paper.title, authors: paper.authors.slice(0, 3).join(', ') + (paper.authors.length > 3 ? ' et al.' : ''), ...(paper.year === undefined ? {} : { year: paper.year }), venue: [paper.venue, `found on ${paper.sources.join(', ')}`].filter(Boolean).join(' · ') },
+    }
+    if (notes.length === 0) return checked
+    if (best === undefined || notes.length < best.notes.length) best = checked
+  }
+  return best ?? 'none'
+}
+
+export async function verifyReference(reference: string, reach: Reach, budget?: Budget): Promise<Checked> {
   const doi = doiOf(reference)
   if (doi !== undefined) {
     let record: Record_ | undefined
@@ -125,7 +183,17 @@ export async function verifyReference(reference: string, reach: Reach): Promise<
       }
     }
     if (closest !== undefined) return { reference, verdict: 'check', notes: closest.notes, matched: matchedOf(closest.record) }
-    return { reference, verdict: 'not_found', notes: ['no record with this title in Crossref, OpenAlex or arXiv; it may be a preprint, a book, a non-English work, or it may not exist. Search for it with paper_search before relying on it.'] }
+    const site = HAS_CJK.test(reference) ? 'CNKI' : 'Google Scholar'
+    let looked = ''
+    try {
+      const found = await viaBrowser(reference, reach, budget)
+      if (typeof found !== 'string') return found
+      looked = found === 'none' ? ` or on ${site}` : ''
+    } catch (error) {
+      if (reach.signal?.aborted) throw error
+      looked = ` (${site} could not be asked: ${error instanceof Error ? error.message : String(error)})`
+    }
+    return { reference, verdict: 'not_found', notes: [`no record with this title in Crossref, OpenAlex or arXiv${looked}; it may be a preprint, a book, a non-English work, or it may not exist. Search for it with paper_search before relying on it.`] }
   }
   const notes = compare(reference, best.candidate)
   return { reference, verdict: notes.length === 0 ? 'verified' : 'check', notes, matched: matchedOf(best.candidate) }

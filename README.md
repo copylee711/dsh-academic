@@ -5,10 +5,10 @@
 DeepSeek Harness 的学术插件，三部分：
 
 - **Zotero**：AI 检索你的 Zotero 文库，读取条目和你在 PDF 里做的批注，阅读全文，导出引文；开启写入后可按 DOI / arXiv 编号入库、写笔记、整理标签和分类。优先连接本机的 Zotero，没有运行时自动启动；也可以通过 zotero.org 访问已同步的文库。
-- **论文检索**：同时查询 arXiv、OpenAlex、Crossref、Semantic Scholar、PubMed、Europe PMC、DBLP，阅读开放获取的全文，从 DOI 注册机构取引文，核验参考文献是否真实存在。
+- **论文检索**：同时查询 arXiv、OpenAlex、Crossref、Semantic Scholar、PubMed、Europe PMC、DBLP，阅读开放获取的全文，从 DOI 注册机构取引文，核验参考文献是否真实存在。知网和 Google Scholar 没有开放接口，插件通过一个独立的浏览器窗口检索它们。
 - **学术技能**：内置 11 个技能，覆盖文献综述、论文精读、写作、润色、模拟审稿、回复审稿意见等。
 
-全部用 TypeScript 实现，不需要 Python，也不需要另装 MCP 服务。所有检索源都可以不填密钥使用。
+全部用 TypeScript 实现，不需要 Python，也不需要另装 MCP 服务。所有检索源都可以不填密钥使用。检索知网和 Google Scholar 需要本机装有 Chrome 或 Edge。
 
 ![论文检索：工具结果里的论文卡片（标题、作者、年份、期刊、被引数、开放获取标记），下方是回答](assets/paper-search.png)
 
@@ -56,10 +56,21 @@ DeepSeek Harness 的学术插件，三部分：
 | 引用关系 | 谁引用了它、它引用了谁、相关论文 |
 | 阅读全文 | arXiv 论文读 HTML 版（保留章节结构，公式为 LaTeX），PubMed Central 文章读结构化全文，其余读开放获取 PDF；可先看目录再读某一节，或按问题找段落 |
 | 获取引文 | 从 DOI 注册机构取 BibTeX、RIS、CSL JSON 或指定样式的参考文献，不由模型凭记忆书写 |
-| 核验参考文献 | 逐条检查 DOI 是否存在、是否指向另一篇文章，标题、第一作者、年份是否相符，是否已撤稿 |
+| 核验参考文献 | 逐条检查 DOI 是否存在、是否指向另一篇文章，标题、第一作者、年份是否相符，是否已撤稿；各数据源都查不到的，中文文献再到知网查，其他语言的到 Google Scholar 查 |
+| 知网、Google Scholar | 在 `paper_search` 里点名使用（`sources` 填 `cnki` 或 `googlescholar`），返回题录：标题、作者、年份、刊名、被引数、链接 |
 | 下载 PDF | 把开放获取的 PDF 保存到工作区的 `papers/` 目录 |
 
 只获取合法开放的全文，不绕过付费墙；读不到时如实告知。
+
+#### 知网和 Google Scholar
+
+这两个网站不向程序开放接口，无头浏览器和直接请求都会被拦下。插件的做法是在屏幕外打开一个普通的 Chrome 或 Edge 窗口，用它自己的浏览器配置（不读取你平时浏览器里的登录和记录），像人一样打开网站检索：知网从首页的检索框输入，Google Scholar 打开检索页。
+
+- 优先用系统默认浏览器（默认浏览器是 Chrome、Edge 时），否则用装了的那个；跟随系统代理设置，没有代理就直连。Google Scholar 在不能直连的网络下需要系统代理。
+- 一次检索约 3 到 10 秒；窗口在屏幕外，任务栏上会多一个浏览器图标；10 分钟不用后自动关闭。
+- 网站要求人机验证时，插件不会自己去通过：窗口会显示到屏幕上，等你完成（最多 2 分钟），完成后检索继续。没有人完成时，这次检索如实报告失败，核验参考文献的本次调用也不再打开浏览器。
+- 知网返回题录。如果你的网络有机构权限（校园网、机构 IP），链接打开后可以下载全文，插件本身不下载。
+- 这两个来源默认不参与每次检索，AI 需要时点名使用；也可以在设置里把它们加入默认数据源。
 
 ### 学术技能
 
@@ -144,7 +155,9 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 | 默认文库 | `user` | `user` 为“我的文库”，群组文库填数字 ID |
 | 本地服务地址 | `http://127.0.0.1:23119` | 只接受本机地址 |
 | 启用论文工具 | 开 | 关闭后 AI 看不到 `paper_` 和 `reference_verify` 工具 |
-| 默认数据源 | 除 DBLP 外全部 | 检索时默认查询的数据源 |
+| 默认数据源 | 除 DBLP、知网、Google Scholar 外全部 | 检索时默认查询的数据源 |
+| 用浏览器检索知网和 Google Scholar | 开 | 关闭后这两个来源不可用，插件不会启动浏览器 |
+| 浏览器程序路径 | 空 | 自动查找 Chrome / Edge 失败时才需要填写 |
 | 联系邮箱 | 空 | 发给 Crossref、OpenAlex、NCBI、Europe PMC、Unpaywall；填写后查找开放获取全文时才询问 Unpaywall |
 | Semantic Scholar / OpenAlex / NCBI API Key | 空 | 都是可选的，只影响限速 |
 | 默认引文样式 | `apa` | CSL 样式 ID |
@@ -171,7 +184,9 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 - 扫描版 PDF（没有文字层）读不出文字。从 PDF 读出的文本没有章节结构，公式和表格可能错乱；arXiv 的 HTML 版和 PubMed Central 的全文没有这个问题。
 - Semantic Scholar 不填密钥时经常被限流，此时自动跳过，结果里会注明。
 - DBLP 在部分网络环境下要求浏览器验证，无法通过接口访问，因此默认不启用。
-- 没有接入知网、万方、百度学术（它们不提供公开接口）。中文期刊只能查到 OpenAlex 和 Crossref 收录的部分。
+- 没有接入万方、百度学术。百度学术对自动打开的浏览器每次都要求人机验证，无法使用。
+- 知网和 Google Scholar 只返回题录，没有摘要全文（Google Scholar 有一两句片段），不能用 `paper_get`、`paper_read`、`paper_cite` 进一步处理，除非结果里带有 DOI 或 arXiv 链接。知网默认按发表时间排列结果。连续检索太多会被要求人机验证或暂时拒绝。
+- 图书在知网查不到，核验时仍会显示“未找到”。
 - 参考文献核验依赖 Crossref、OpenAlex 和 arXiv 的收录；查不到不等于文献不存在（书籍、中文文献、会议论文集常常查不到），结果里会区分“未找到”和“有出入”。
 - Zotero 7 到 9 的本地 API 只读，入库、笔记、整理不可用（可改用 zotero.org 密钥写入）。附件文件尚未下载到本机时无法阅读。
 - Zotero 没有无窗口运行方式，自动启动的 Zotero 会留在任务栏。本地 API 开关必须事先在 Zotero 里开启，插件无法代为开启。Linux 上自动启动的窗口不会最小化。
@@ -183,6 +198,7 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 
 - 读取本机 Zotero 时，数据只在本机的 Zotero（`127.0.0.1`）和 DSH 之间传递，随后作为工具结果发给你在 DSH 里配置的模型。
 - 填写了 zotero.org 密钥并用到在线文库时，请求发往 `api.zotero.org`，附件文件从 Zotero 的存储服务下载；密钥只发给 `api.zotero.org`。文库来源设为“仅本机”时不会访问它。
+- 用浏览器检索时，检索词由那个浏览器窗口发给 `www.cnki.net` / `kns.cnki.net` 或 `scholar.google.com`；浏览器的配置（含这两个网站的 Cookie）保存在 `~/.dsh/storages/copylee-academic/browser/`。
 - 论文检索把检索词、DOI 等标识符发给被查询的数据源：`export.arxiv.org`、`arxiv.org`、`ar5iv.labs.arxiv.org`、`api.openalex.org`、`api.crossref.org`、`api.semanticscholar.org`、`eutils.ncbi.nlm.nih.gov`、`www.ebi.ac.uk`（Europe PMC）、`dblp.org`、`doi.org`、`api.unpaywall.org`（仅在填写邮箱后），以及这些数据源给出的开放获取 PDF 所在的网站。
 - 联系邮箱只发给 Crossref、OpenAlex、NCBI、Europe PMC 和 Unpaywall。API Key 只发给各自的服务。
 - 读过的论文全文缓存在 `~/.dsh/storages/copylee-academic/papers/`。
@@ -193,6 +209,8 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 Zotero 部分通过它的本地 API（`http://127.0.0.1:23119/api/`，与 Zotero Web API v3 同构）读写文库；引文导出和格式化由 Zotero 完成。全文来自 Zotero 的全文索引或本机 PDF。在线文库走 zotero.org 的 Web API（`https://api.zotero.org`），路径相同，只是把 `users/0` 换成密钥所属用户的 ID，所以两边共用同一套工具。本机 Zotero 没有应答时，Windows 上用一段 PowerShell 启动它并在窗口出现的瞬间最小化、把焦点还给原窗口；macOS 上用 `open -g -j`。
 
 论文检索直接调用各数据源的公开接口，结果统一为同一种记录，按 DOI、arXiv 编号、PMID 和标题合并，再用倒数排名融合排序。每个数据源按其要求限速（arXiv 每 3 秒一次），遇到 429 / 503 按 `Retry-After` 重试。全文按 arXiv HTML → ar5iv → PubMed Central → 开放获取 PDF 的顺序获取，PDF 用 pdf.js 提取文字。按问题找段落时用 BM25 排序，分词使用 `Intl.Segmenter`，中文也按词切分。
+
+知网和 Google Scholar 通过 Chrome DevTools 协议驱动浏览器：用 `--remote-debugging-port=0` 启动（只监听本机），在页面里读取结果列表的文字，不依赖 Playwright 等库。窗口是有界面的普通窗口，不伪装浏览器特征。
 
 技能通过 DSH 的技能注册接口提供，优先级低于你自己安装的同名技能。
 
@@ -207,6 +225,8 @@ pnpm test
 pnpm run build
 node scripts/zotero-smoke.mjs "attention"   # 只读，需要本机 Zotero 在运行
 node scripts/search-smoke.mjs "graph neural networks"   # 访问真实的学术接口
+node scripts/browser-smoke.mjs   # 打开浏览器检索知网和 Google Scholar
+node scripts/cloud-smoke.mjs   # 只读访问 zotero.org，需要环境变量 ZOTERO_API_KEY
 node scripts/import-nature-skills.mjs <nature-skills 的本地克隆>   # 重新生成改编的技能
 ```
 

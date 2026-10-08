@@ -8,6 +8,7 @@ import { join, relative, resolve, sep } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { findSection, outlineOf } from '../fulltext/markup.js'
 import { isPublicUrl, parsePaperId, resolveFullText, type FullText, type PaperId, type TextCache } from '../fulltext/resolve.js'
+import type { WebBrowser } from '../browser/session.js'
 import type { Http } from '../net/http.js'
 import { untrusted } from '../net/untrusted.js'
 import type { Settings } from '../settings.js'
@@ -24,6 +25,8 @@ export interface PaperHost {
   http: Http
   cache: TextCache
   pdfText(data: Uint8Array): Promise<string>
+  /** The plugin's browser for CNKI and Google Scholar. */
+  browser?: WebBrowser
   /** The clock; replaced in tests. */
   now?(): Date
 }
@@ -68,7 +71,7 @@ const why = (error: unknown): string => (error instanceof Error ? error.message 
 
 export function createPaperTools(host: PaperHost): ToolDefinition[] {
   const tools: ToolDefinition[] = []
-  const reachOf = (signal?: AbortSignal): Reach => ({ http: host.http, keys: keysOf(host.settings()), signal })
+  const reachOf = (signal?: AbortSignal): Reach => ({ http: host.http, keys: keysOf(host.settings()), signal, ...(host.browser !== undefined && host.settings().browser ? { browser: host.browser } : {}) })
 
   /** Everything the indexes know about one paper, merged; undefined when none of them has it. */
   const lookup = async (id: PaperId | undefined, raw: string, reach: Reach): Promise<Paper | undefined> => {
@@ -102,10 +105,10 @@ export function createPaperTools(host: PaperHost): ToolDefinition[] {
 
   tools.push(defineTool({
     name: 'paper_search',
-    description: 'Search the scholarly literature across arXiv, OpenAlex, Crossref, Semantic Scholar, PubMed, Europe PMC and DBLP at once; the same paper found in several is returned once. Use it for papers, not for general web pages. Each hit has an id to pass to paper_get, paper_read, paper_citations or paper_cite.',
+    description: 'Search the scholarly literature across arXiv, OpenAlex, Crossref, Semantic Scholar, PubMed, Europe PMC and DBLP at once; the same paper found in several is returned once. CNKI (Chinese journals and theses) and Google Scholar can be named in sources too: they are searched through a browser window, which takes 10 to 20 seconds and may stop for a human check the user has to answer. Use it for papers, not for general web pages. Each hit has an id to pass to paper_get, paper_read, paper_citations or paper_cite.',
     parameters: {
       query: { type: 'string', required: true, description: 'Topic words, a title, or an author with a topic. Plain keywords work in every index; write them in English unless the literature is in another language.' },
-      sources: { type: 'array', items: { type: 'string', enum: [...SOURCE_IDS] }, description: 'Limit to these indexes. Default: the ones enabled in settings. arxiv for CS / physics / math preprints; pubmed and europepmc for medicine and biology; dblp for computer science venues; openalex and crossref for everything.' },
+      sources: { type: 'array', items: { type: 'string', enum: [...SOURCE_IDS] }, description: 'Limit to these indexes. Default: the ones enabled in settings. arxiv for CS / physics / math preprints; pubmed and europepmc for medicine and biology; dblp for computer science venues; openalex and crossref for everything; cnki for literature in Chinese (query in Chinese); googlescholar when the others do not find a work that should exist.' },
       year_from: { type: 'integer', description: 'Published in this year or later.' },
       year_to: { type: 'integer', description: 'Published in this year or earlier.' },
       open_access: { type: 'boolean', description: 'Only papers with a free full text.' },
@@ -116,7 +119,8 @@ export function createPaperTools(host: PaperHost): ToolDefinition[] {
     },
     output,
     isConcurrencySafe: () => true,
-    timeoutMs: 90_000,
+    // Long enough for the user to answer a human check in the browser window.
+    timeoutMs: 240_000,
     async execute(args, exec): Promise<Value> {
       const input = args as { query: string; sources?: string[]; year_from?: number; year_to?: number; open_access?: boolean; sort?: Query['sort']; categories?: string[]; limit?: number; abstract?: string }
       const settings = host.settings()
@@ -340,7 +344,7 @@ export function createPaperTools(host: PaperHost): ToolDefinition[] {
 
   tools.push(defineTool({
     name: 'reference_verify',
-    description: 'Check that references exist and are described correctly, against Crossref and the DOI registries: a DOI that does not exist or belongs to another work, a wrong title, first author or year, and retracted papers. Run it on any reference list before handing it to the user, including one you wrote yourself.',
+    description: 'Check that references exist and are described correctly, against Crossref and the DOI registries (and, for the few that no index knows, CNKI for references in Chinese or Google Scholar, through a browser window): a DOI that does not exist or belongs to another work, a wrong title, first author or year, and retracted papers. Run it on any reference list before handing it to the user, including one you wrote yourself.',
     parameters: {
       references: { type: 'array', required: true, items: { type: 'string' }, description: 'One reference per entry, as written (authors, year, title, venue, DOI if any). Up to 40.' },
     },
@@ -353,9 +357,11 @@ export function createPaperTools(host: PaperHost): ToolDefinition[] {
       const reach = reachOf(exec.signal)
       const lines: string[] = []
       const counts = { verified: 0, check: 0, not_found: 0, failed: 0 }
+      // Each lookup in the browser takes several seconds; a long list gets only so many.
+      const budget = { browser: 8 }
       for (const [index, reference] of references.entries()) {
         try {
-          const checked = await verifyReference(reference, reach)
+          const checked = await verifyReference(reference, reach, budget)
           counts[checked.verdict]++
           lines.push(formatChecked(checked, index + 1))
         } catch (error) {

@@ -4,6 +4,8 @@
  * without a key; a contact e-mail or a key only raises their limits.
  */
 import { XMLParser } from 'fast-xml-parser'
+import type { WebBrowser } from '../browser/session.js'
+import { cnkiSearch, scholarSearch } from '../browser/sites.js'
 import type { Http } from '../net/http.js'
 import { cleanDoi, plain, type Paper, type SourceId } from '../search/paper.js'
 import { arxivId, parseArxivAtom, type ArxivPaper } from './arxiv.js'
@@ -26,7 +28,13 @@ export interface Keys {
   ncbiKey?: string
 }
 
-export interface Reach { http: Http; keys: Keys; signal?: AbortSignal | undefined }
+export interface Reach {
+  http: Http
+  keys: Keys
+  signal?: AbortSignal | undefined
+  /** The plugin's browser, for CNKI and Google Scholar; absent when browser search is switched off. */
+  browser?: WebBrowser | undefined
+}
 
 const params = (values: Record<string, string | number | undefined>): string =>
   Object.entries(values).filter((entry): entry is [string, string | number] => entry[1] !== undefined && entry[1] !== '').map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`).join('&')
@@ -346,4 +354,19 @@ async function dblp(query: Query, reach: Reach): Promise<Paper[]> {
     .slice(0, query.limit)
 }
 
-export const SEARCHERS: Record<SourceId, (query: Query, reach: Reach) => Promise<Paper[]>> = { arxiv, openalex, crossref, semanticscholar, pubmed, europepmc, dblp }
+function browserOf(reach: Reach): WebBrowser {
+  if (reach.browser === undefined) throw new Error('searching through the browser is switched off in Settings > 学术')
+  return reach.browser
+}
+
+const webQuery = (query: Query) => ({ query: query.query, limit: query.limit, ...(query.yearFrom === undefined ? {} : { yearFrom: query.yearFrom }), ...(query.yearTo === undefined ? {} : { yearTo: query.yearTo }) })
+
+async function cnki(query: Query, reach: Reach): Promise<Paper[]> {
+  return await browserOf(reach).use(tab => cnkiSearch(tab, webQuery(query), browserOf(reach).pace ?? {}, reach.signal), reach.signal)
+}
+
+async function googlescholar(query: Query, reach: Reach): Promise<Paper[]> {
+  return await browserOf(reach).use(tab => scholarSearch(tab, webQuery(query), browserOf(reach).pace ?? {}, reach.signal), reach.signal)
+}
+
+export const SEARCHERS: Record<SourceId, (query: Query, reach: Reach) => Promise<Paper[]>> = { arxiv, openalex, crossref, semanticscholar, pubmed, europepmc, dblp, cnki, googlescholar }

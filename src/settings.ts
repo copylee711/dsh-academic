@@ -7,8 +7,12 @@
 /** The Loader entry id (settings namespace); see cordis.patch.yml. */
 export const ENTRY_ID = 'copylee-academic'
 
-/** Every index paper_search can ask; DBLP is off by default (it turns away non-browser clients on some networks). */
-export const ALL_SOURCES = ['arxiv', 'openalex', 'crossref', 'semanticscholar', 'pubmed', 'europepmc', 'dblp']
+/**
+ * Every index paper_search can ask. Off by default: DBLP (it turns away non-browser clients on some
+ * networks), and CNKI and Google Scholar (searched through a browser window, so slower and at times
+ * interrupted by a human check; the model names them when it needs them).
+ */
+export const ALL_SOURCES = ['arxiv', 'openalex', 'crossref', 'semanticscholar', 'pubmed', 'europepmc', 'dblp', 'cnki', 'googlescholar']
 
 export const DEFAULT_ZOTERO_URL = 'http://127.0.0.1:23119'
 
@@ -41,6 +45,10 @@ export interface Settings {
   sources: string[]
   /** Contact address sent to Crossref, OpenAlex, NCBI, Europe PMC and Unpaywall, which ask for one. */
   email: string
+  /** Let the plugin drive a Chrome or Edge window of its own to search CNKI and Google Scholar. */
+  browser: boolean
+  /** Path of the browser program, when it is not found by itself. */
+  browserPath: string
   /** Optional keys; every index works without. */
   s2Key: string
   openalexKey: string
@@ -67,6 +75,8 @@ export const DEFAULTS: Settings = {
   citationStyle: 'apa',
   papers: true,
   sources: ['arxiv', 'openalex', 'crossref', 'semanticscholar', 'pubmed', 'europepmc'],
+  browser: true,
+  browserPath: '',
   email: '',
   s2Key: '',
   openalexKey: '',
@@ -112,6 +122,8 @@ export function resolveConfig(raw: unknown): Settings {
     papers: typeof out.papers === 'boolean' ? out.papers : DEFAULTS.papers,
     sources: sources === undefined ? DEFAULTS.sources : [...new Set(sources)],
     email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text('email')) ? text('email') : '',
+    browser: typeof out.browser === 'boolean' ? out.browser : DEFAULTS.browser,
+    browserPath: text('browserPath').replace(/^"(.*)"$/, '$1'),
     s2Key: text('s2Key'),
     openalexKey: text('openalexKey'),
     ncbiKey: text('ncbiKey'),

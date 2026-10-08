@@ -75,6 +75,7 @@ describe('notes', () => {
   })
   it('reads a note back as text', () => {
     expect(htmlToText('<h1>T</h1><p>a &amp; b&nbsp;c</p><ul><li>x</li><li>y</li></ul>')).toBe('T\na & b c\n- x\n- y')
+    expect(htmlToText('VASWANI A, &#x7B49;. T: &#x5377; 30 &#233;')).toBe('VASWANI A, 等. T: 卷 30 é')
   })
 })
 

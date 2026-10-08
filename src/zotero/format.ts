@@ -86,6 +86,8 @@ export function htmlToText(html: string): string {
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, '\'')
     .replace(/&#(\d+);/g, (_all, code: string) => String.fromCodePoint(Number(code)))
+    // zotero.org writes non-ASCII characters of a formatted reference this way.
+    .replace(/&#x([0-9a-f]{1,6});/gi, (_all, code: string) => { const point = Number.parseInt(code, 16); return point <= 0x10ffff ? String.fromCodePoint(point) : '' })
     .replace(/&amp;/g, '&')
     .replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }

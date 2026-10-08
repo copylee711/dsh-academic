@@ -31,11 +31,13 @@ export interface Paper {
   sources: string[]
 }
 
-export const SOURCE_IDS = ['arxiv', 'openalex', 'crossref', 'semanticscholar', 'pubmed', 'europepmc', 'dblp'] as const
+export const SOURCE_IDS = ['arxiv', 'openalex', 'crossref', 'semanticscholar', 'pubmed', 'europepmc', 'dblp', 'cnki', 'googlescholar'] as const
+/** The sources searched through the plugin's browser rather than an interface for programs. */
+export const BROWSER_SOURCES: readonly string[] = ['cnki', 'googlescholar']
 export type SourceId = typeof SOURCE_IDS[number]
 
 export const SOURCE_NAMES: Record<SourceId, string> = {
-  arxiv: 'arXiv', openalex: 'OpenAlex', crossref: 'Crossref', semanticscholar: 'Semantic Scholar', pubmed: 'PubMed', europepmc: 'Europe PMC', dblp: 'DBLP',
+  arxiv: 'arXiv', openalex: 'OpenAlex', crossref: 'Crossref', semanticscholar: 'Semantic Scholar', pubmed: 'PubMed', europepmc: 'Europe PMC', dblp: 'DBLP', cnki: 'CNKI', googlescholar: 'Google Scholar',
 }
 
 export function cleanDoi(value: unknown): string | undefined {
@@ -131,8 +133,10 @@ export function bestId(paper: Paper): string {
 
 export function formatPaper(paper: Paper, index: number, abstractChars: number): string {
   const facts = [authorLine(paper.authors), paper.year === undefined ? '' : String(paper.year), paper.venue ?? ''].filter(Boolean).join(' · ')
+  const id = bestId(paper)
   const marks = [
-    `id: ${bestId(paper)}`,
+    // A paper known only by its page (CNKI, Google Scholar) has no id the paper_ tools take; its link is on the next line.
+    id === paper.url ? '' : `id: ${id}`,
     paper.citations === undefined ? '' : `cited ${String(paper.citations)}`,
     paper.pdfUrl !== undefined || paper.openAccess === true ? 'open access' : '',
     paper.retracted === true ? 'RETRACTED' : '',

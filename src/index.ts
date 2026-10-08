@@ -15,6 +15,8 @@ import type {} from './system-prompt-service.js'
 import type {} from './skills-service.js'
 import { createSkillProvider, discoverSkills, skillAppendix, skillsRoot } from './skills/provider.js'
 import { join } from 'node:path'
+import { findBrowser } from './browser/find.js'
+import { createBrowserSession } from './browser/session.js'
 import { pdfText } from './fulltext/pdf.js'
 import { TextCache } from './fulltext/resolve.js'
 import { createHttp } from './net/http.js'
@@ -48,6 +50,8 @@ export interface Config {
   citationStyle?: string
   papers?: boolean
   sources?: string[]
+  browser?: boolean
+  browserPath?: string
   email?: string
   s2Key?: string
   openalexKey?: string
@@ -103,6 +107,14 @@ export const Config: z<Config> = z.object({
     'zh-CN': { $description: '论文检索默认使用的数据源' },
     'en-US': { $description: 'Indexes the paper search asks by default' },
   }),
+  browser: z.boolean().default(DEFAULTS.browser).volatile().i18n({
+    'zh-CN': { $description: '允许用浏览器检索知网和谷歌学术：插件在屏幕外打开一个独立的 Chrome / Edge 窗口来查询，遇到人机验证时把窗口显示出来由你完成' },
+    'en-US': { $description: 'Search CNKI and Google Scholar through a Chrome / Edge window of the plugin\'s own, kept off screen; when a site asks for a human check the window is shown for you to answer' },
+  }),
+  browserPath: z.string().default('').volatile().i18n({
+    'zh-CN': { $description: '浏览器程序（Chrome 或 Edge）的路径。留空时自动查找' },
+    'en-US': { $description: 'Path of the browser program (Chrome or Edge). Found automatically when empty' },
+  }),
   email: z.string().default('').volatile().i18n({
     'zh-CN': { $description: '联系邮箱（可选）：发给 Crossref、OpenAlex、NCBI、Europe PMC、Unpaywall，用于更宽松的限速；填写后才会向 Unpaywall 查询开放获取全文' },
     'en-US': { $description: 'Contact e-mail (optional), sent to Crossref, OpenAlex, NCBI, Europe PMC and Unpaywall for friendlier limits; Unpaywall is only asked when it is set' },
@@ -154,7 +166,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   const readTools = createReadTools(host)
   const http = createHttp()
   const writeTools = createWriteTools({ ...host, writer, http })
-  const paperTools = createPaperTools({ settings, http, pdfText, cache: new TextCache(join(resolveDataDir(), 'papers')) })
+  const browser = createBrowserSession({ program: () => findBrowser(settings().browserPath), profileDir: join(resolveDataDir(), 'browser') })
+  const paperTools = createPaperTools({ settings, http, pdfText, cache: new TextCache(join(resolveDataDir(), 'papers')), browser })
 
   const bundledSkills = discoverSkills(skillsRoot())
   let skillsRegistered = false
@@ -177,6 +190,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const stop = ctx.on('loader/volatile-update' as never, (() => { sync(); for (const listener of settingsListeners) listener() }) as never)
     return () => {
       disposed = true
+      void browser.dispose()
       stop()
       for (const dispose of registered.values()) dispose()
       registered.clear()
@@ -226,7 +240,8 @@ export function apply(ctx: Context, config: Config = {}): void {
           }
         }
         const program = now.zoteroSource === 'cloud' ? undefined : await findZotero(now.zoteroPath).catch(() => undefined)
-        body = { ok: true, zotero: { ...probe, ...(items === undefined ? {} : { items }) }, cloud, program: program !== undefined, ...(client.startError === undefined ? {} : { startError: client.startError }), skills: bundledSkills.map(skill => ({ name: skill.name, description: skill.description })), skillsRegistered }
+        const browserProgram = now.browser ? await findBrowser(now.browserPath).catch(() => undefined) : undefined
+        body = { ok: true, zotero: { ...probe, ...(items === undefined ? {} : { items }) }, cloud, program: program !== undefined, browser: browserProgram === undefined ? '' : browserProgram.replace(/^.*[\\/]/, ''), ...(client.startError === undefined ? {} : { startError: client.startError }), skills: bundledSkills.map(skill => ({ name: skill.name, description: skill.description })), skillsRegistered }
       } catch (error) {
         body = { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
