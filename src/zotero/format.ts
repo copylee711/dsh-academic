@@ -63,7 +63,8 @@ export function creatorName(creator: Creator): string {
 }
 
 export function creatorSummary(item: Item): string {
-  if (item.meta?.creatorSummary) return item.meta.creatorSummary
+  // Zotero wraps each name in invisible direction marks (U+2068 … U+2069); they are noise in plain text.
+  if (item.meta?.creatorSummary) return item.meta.creatorSummary.replace(/[⁦-⁩‎‏]/g, '')
   const authors = (item.data.creators ?? []).filter(creator => creator.creatorType === undefined || creator.creatorType === 'author')
   const names = (authors.length > 0 ? authors : item.data.creators ?? []).map(creator => creator.lastName ?? creator.name ?? '').filter(Boolean)
   if (names.length === 0) return ''

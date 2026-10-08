@@ -11,6 +11,8 @@ import { registerNavIcon } from './nav-icon.js'
 import { PaperToolCard } from './paper-card.js'
 
 const STATUS_ROUTE = '/api/dsh-academic/status'
+const KEYS_ROUTE = '/api/dsh-academic/keys'
+type KeyName = 'zotero' | 's2' | 'openalex' | 'ncbi'
 const LABEL = '学术'
 
 type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: { code?: string; message: string } }
@@ -32,7 +34,7 @@ interface ClientContext {
 }
 
 interface CloudStatus { configured: boolean; ok?: boolean; username?: string; library?: boolean; write?: boolean; files?: boolean; items?: number; error?: string }
-interface Status { ok: boolean; error?: string; zotero?: { running: boolean; writable: boolean; version?: string; items?: number; error?: string }; cloud?: CloudStatus; program?: boolean; browser?: string; startError?: string; skills?: Array<{ name: string; description: string }>; skillsRegistered?: boolean }
+interface Status { ok: boolean; error?: string; zotero?: { running: boolean; writable: boolean; version?: string; items?: number; error?: string }; cloud?: CloudStatus; keys?: Partial<Record<KeyName, boolean>>; program?: boolean; browser?: string; startError?: string; skills?: Array<{ name: string; description: string }>; skillsRegistered?: boolean }
 
 const SKILL_LABELS: Record<string, string> = {
   'academic-literature-review': '文献综述',
@@ -106,13 +108,36 @@ const SOURCE_OPTIONS = [['auto', '自动'], ['local', '仅本机'], ['cloud', '�
 /** The state of the online library, or null when it plays no part. */
 function cloudLine(status: Status | null, settings: Settings): { color: string; text: string } | null {
   if (settings.zoteroSource === 'local') return null
-  if (settings.zoteroApiKey === '') return settings.zoteroSource === 'cloud' ? { color: '#d33', text: '在线文库：还没有填写 API 密钥。' } : null
+  if (status !== null && status.keys?.zotero !== true) return settings.zoteroSource === 'cloud' ? { color: '#d33', text: '在线文库：还没有填写 API 密钥。' } : null
   const cloud = status?.cloud
   if (cloud === undefined || cloud.ok === undefined) return { color: '#999', text: '在线文库：检查中…' }
   if (!cloud.ok) return { color: '#d33', text: `在线文库：连接失败。${cloud.error ?? ''}` }
   if (cloud.library !== true) return { color: '#d33', text: `在线文库：密钥属于 ${cloud.username ?? ''}，但没有读取个人文库的权限。请在 zotero.org/settings/keys 勾选“Allow library access”。` }
   const items = cloud.items === undefined ? '' : `，${String(cloud.items)} 个条目`
   return { color: '#2a2', text: `在线文库：已连接 zotero.org（${cloud.username ?? ''}${items}）。${cloud.write === true ? '密钥可写入。' : '密钥只读。'}${cloud.files === true ? '' : '密钥没有文件权限，读不到存放在 Zotero 云端的 PDF。'}` }
+}
+
+/**
+ * An API key: typed in, sent to the host, and never shown again. The page only knows whether one is stored
+ * (the keys live in DSH's credential store, not in the settings a profile backup would carry).
+ */
+function KeyField({ saved, disabled, onSave }: { saved: boolean; disabled: boolean; onSave(value: string): Promise<void> }) {
+  const [draft, setDraft] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const send = async (value: string): Promise<void> => {
+    setBusy(true)
+    try { await onSave(value); setDraft('') } finally { setBusy(false) }
+  }
+  const commit = (): void => { if (draft.trim() !== '' && !busy) void send(draft.trim()) }
+  return h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flex: '0 0 auto' } },
+    h('input', {
+      type: 'password', autoComplete: 'off', value: draft, disabled: disabled || busy, placeholder: saved ? '已保存（输入新值可替换）' : '未填写', style: S.input,
+      onChange: (event: React.ChangeEvent<HTMLInputElement>) => { setDraft(event.target.value) },
+      onBlur: commit,
+      onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => { if (event.key === 'Enter') commit() },
+    }),
+    saved ? h('button', { type: 'button', style: S.secondary, disabled: disabled || busy, onClick: () => { void send('') } }, '清除') : null,
+  )
 }
 
 function zoteroLine(status: Status | null, settings: Settings): { color: string; text: string } {
@@ -189,8 +214,21 @@ function AcademicSection({ ctx }: { ctx: ClientContext }) {
       setMessage({ kind: 'error', text: `保存失败：${(error as Error).message}` })
     }
     await load()
-    if (['zoteroBaseUrl', 'zoteroLibrary', 'zoteroSource', 'zoteroApiKey', 'zoteroPath', 'zoteroAutoStart', 'browser', 'browserPath'].includes(key)) void refreshStatus()
+    if (['zoteroBaseUrl', 'zoteroLibrary', 'zoteroSource', 'zoteroPath', 'zoteroAutoStart', 'browser', 'browserPath'].includes(key)) void refreshStatus()
   }
+
+  const saveKey = async (name: KeyName, value: string): Promise<void> => {
+    try {
+      const response = await fetch(KEYS_ROUTE, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, value }) })
+      const body = await response.json() as { ok: boolean; error?: string }
+      if (!body.ok) throw new Error(body.error === 'That does not look like an API key.' ? '这看起来不是一个 API 密钥' : body.error ?? '未知错误')
+      setMessage({ kind: 'ok', text: value === '' ? '密钥已清除' : '密钥已保存到凭据存储，下一次调用即生效' })
+    } catch (error) {
+      setMessage({ kind: 'error', text: `保存密钥失败：${(error as Error).message}` })
+    }
+    await refreshStatus()
+  }
+  const keyField = (name: KeyName): React.ReactNode => h(KeyField, { saved: status?.keys?.[name] === true, disabled: disabled || status === null || !status.ok, onSave: value => saveKey(name, value) })
 
   if (!loaded) return h('div', { style: S.page }, '加载中…')
 
@@ -232,10 +270,11 @@ function AcademicSection({ ctx }: { ctx: ClientContext }) {
         ? row('Zotero 程序路径', '没有在常见位置找到 Zotero。填写 zotero.exe（macOS 为 Zotero.app）的完整路径。', h(TextField, { value: settings.zoteroPath, disabled, placeholder: '自动查找', onCommit: value => { void change('zoteroPath', value) } }))
         : null,
       settings.zoteroSource === 'local' ? null
-        : row('zotero.org API 密钥', '在 zotero.org/settings/keys 新建密钥：勾选“Allow library access”，要读云端 PDF 再勾“Allow file access”，要让 AI 修改文库再勾“Allow write access”；访问群组文库需在 Default Group Permissions 里选择权限。密钥只发给 zotero.org。在线文库只包含已同步的内容；用 WebDAV 同步或没有开启文件同步时，PDF 全文读不到。',
-          h(TextField, { value: settings.zoteroApiKey, disabled, secret: true, placeholder: '未填写', onCommit: value => { void change('zoteroApiKey', value) } })),
+        : row('zotero.org API 密钥', '在 zotero.org/settings/keys 新建密钥：勾选“Allow library access”，要读云端 PDF 再勾“Allow file access”，要让 AI 修改文库再勾“Allow write access”；访问群组文库需在 Default Group Permissions 里选择权限。密钥只发给 zotero.org，保存在 DSH 的凭据存储里，不写进设置文件，导出插件备份时不会带上。在线文库只包含已同步的内容；用 WebDAV 同步或没有开启文件同步时，PDF 全文读不到。',
+          keyField('zotero')),
       row('默认文库', '填 user 表示“我的文库”；群组文库填它的数字 ID（可以让 AI 列出群组）。', h(TextField, { value: settings.zoteroLibrary, disabled, placeholder: 'user', onCommit: value => { void change('zoteroLibrary', value || DEFAULTS.zoteroLibrary) } })),
       row('本地服务地址', 'Zotero 本地服务的地址，只接受本机地址。一般不用改。', h(TextField, { value: settings.zoteroBaseUrl, disabled, placeholder: DEFAULTS.zoteroBaseUrl, onCommit: value => { void change('zoteroBaseUrl', value || DEFAULTS.zoteroBaseUrl) } })),
+      message === null ? null : h('span', { style: message.kind === 'ok' ? S.ok : S.error }, message.text),
     ),
 
     h('section', { style: S.card },
@@ -259,9 +298,10 @@ function AcademicSection({ ctx }: { ctx: ClientContext }) {
         ? row('浏览器程序路径', 'chrome.exe 或 msedge.exe 的完整路径（macOS 为应用包内的可执行文件）。', h(TextField, { value: settings.browserPath, disabled, placeholder: '自动查找', onCommit: value => { void change('browserPath', value) } }))
         : null,
       row('联系邮箱（可选）', 'Crossref、OpenAlex、NCBI、Europe PMC、Unpaywall 希望调用方留一个联系邮箱，留了限速更宽松。填写后，查找开放获取全文时才会询问 Unpaywall。邮箱只发给这五家。', h(TextField, { value: settings.email, disabled, placeholder: 'you@example.org', onCommit: value => { void change('email', value) } })),
-      row('Semantic Scholar API Key（可选）', '在 semanticscholar.org 免费申请。填写后可稳定获得一句话摘要和引用数。', h(TextField, { value: settings.s2Key, disabled, secret: true, placeholder: '未填写', onCommit: value => { void change('s2Key', value) } })),
-      row('OpenAlex API Key（可选）', '不填时使用匿名额度，一般够用。', h(TextField, { value: settings.openalexKey, disabled, secret: true, placeholder: '未填写', onCommit: value => { void change('openalexKey', value) } })),
-      row('NCBI API Key（可选）', 'PubMed 的密钥，填写后限速从每秒 3 次提高到 10 次。', h(TextField, { value: settings.ncbiKey, disabled, secret: true, placeholder: '未填写', onCommit: value => { void change('ncbiKey', value) } })),
+      row('Semantic Scholar API Key（可选）', '在 semanticscholar.org 免费申请。填写后可稳定获得一句话摘要和引用数。', keyField('s2')),
+      row('OpenAlex API Key（可选）', '不填时使用匿名额度，一般够用。', keyField('openalex')),
+      row('NCBI API Key（可选）', 'PubMed 的密钥，填写后限速从每秒 3 次提高到 10 次。', keyField('ncbi')),
+      message === null ? null : h('span', { style: message.kind === 'ok' ? S.ok : S.error }, message.text),
     ),
 
     h('section', { style: S.card },

@@ -151,7 +151,7 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 | 文库来源 | 自动 | 自动：本机优先，连不上时用 zotero.org；仅本机；仅在线 |
 | 自动启动 Zotero | 开 | 用到本机 Zotero 而它没有运行时启动它，窗口最小化到任务栏，用完不关闭 |
 | Zotero 程序路径 | 空 | 自动查找失败时才需要填写 |
-| zotero.org API 密钥 | 空 | 在 zotero.org/settings/keys 创建；读文库勾选 library access，读云端 PDF 勾选 file access，修改文库勾选 write access |
+| zotero.org API 密钥 | 空 | 在 zotero.org/settings/keys 创建；读文库勾选 library access，读云端 PDF 勾选 file access，修改文库勾选 write access。保存在凭据存储里，不在设置文件中 |
 | 默认文库 | `user` | `user` 为“我的文库”，群组文库填数字 ID |
 | 本地服务地址 | `http://127.0.0.1:23119` | 只接受本机地址 |
 | 启用论文工具 | 开 | 关闭后 AI 看不到 `paper_` 和 `reference_verify` 工具 |
@@ -159,7 +159,7 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 | 用浏览器检索知网和 Google Scholar | 开 | 关闭后这两个来源不可用，插件不会启动浏览器 |
 | 浏览器程序路径 | 空 | 自动查找 Chrome / Edge 失败时才需要填写 |
 | 联系邮箱 | 空 | 发给 Crossref、OpenAlex、NCBI、Europe PMC、Unpaywall；填写后查找开放获取全文时才询问 Unpaywall |
-| Semantic Scholar / OpenAlex / NCBI API Key | 空 | 都是可选的，只影响限速 |
+| Semantic Scholar / OpenAlex / NCBI API Key | 空 | 都是可选的，只影响限速。保存在凭据存储里，不在设置文件中 |
 | 默认引文样式 | `apa` | CSL 样式 ID |
 | 单次读取全文的长度 | 12000 字符 | 分段阅读时每段的上限 |
 | 单次检索条目数上限 | 20 | 一次检索最多返回的条目数 |
@@ -201,6 +201,7 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 - 用浏览器检索时，检索词由那个浏览器窗口发给 `www.cnki.net` / `kns.cnki.net` 或 `scholar.google.com`；浏览器的配置（含这两个网站的 Cookie）保存在 `~/.dsh/storages/copylee-academic/browser/`。
 - 论文检索把检索词、DOI 等标识符发给被查询的数据源：`export.arxiv.org`、`arxiv.org`、`ar5iv.labs.arxiv.org`、`api.openalex.org`、`api.crossref.org`、`api.semanticscholar.org`、`eutils.ncbi.nlm.nih.gov`、`www.ebi.ac.uk`（Europe PMC）、`dblp.org`、`doi.org`、`api.unpaywall.org`（仅在填写邮箱后），以及这些数据源给出的开放获取 PDF 所在的网站。
 - 联系邮箱只发给 Crossref、OpenAlex、NCBI、Europe PMC 和 Unpaywall。API Key 只发给各自的服务。
+- 四个 API 密钥保存在 DSH 的凭据存储（`.credentials.yaml`，记录名 `copylee-academic/<名称>`）里；没有凭据存储的宿主上保存在 `~/.dsh/storages/copylee-academic/keys.json`。它们不写进插件设置，所以导出的插件备份和 `cordis.patch.yml` 里没有密钥，设置页也只知道某个密钥是否已填。0.5.0 及更早版本把密钥写在设置里：升级后首次启动会自动移走。在那之前导出过的备份里仍有密钥，分享前请检查，必要时到对应网站重新生成密钥。
 - 读过的论文全文缓存在 `~/.dsh/storages/copylee-academic/papers/`。
 - 选“始终允许”后，Zotero 发放的本地写入密钥保存在 `~/.dsh/storages/copylee-academic/zotero-key.json`，只对签发它的那个 Zotero 实例有效。
 

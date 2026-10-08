@@ -19,10 +19,11 @@ import { findBrowser } from './browser/find.js'
 import { createBrowserSession } from './browser/session.js'
 import { pdfText } from './fulltext/pdf.js'
 import { TextCache } from './fulltext/resolve.js'
+import { credentialKeyStore, fileKeyStore as fileApiKeyStore, hasRecordApi, isKeyName, KEY_NAMES, Keys, layeredKeyStore } from './keys.js'
 import { createHttp } from './net/http.js'
 import { promptText } from './prompt.js'
 import { createPaperTools } from './search/tools.js'
-import { ALL_SOURCES, DEFAULTS, resolveConfig, ZOTERO_SOURCES, type Settings } from './settings.js'
+import { ALL_SOURCES, DEFAULTS, ENTRY_ID, resolveConfig, ZOTERO_SOURCES, type Settings } from './settings.js'
 import { resolveDataDir } from './storage.js'
 import { fileKeyStore, ZoteroWriter } from './zotero/auth.js'
 import { ZoteroClient } from './zotero/client.js'
@@ -37,6 +38,7 @@ export const name = '@copylee/dsh-academic'
 export const inject = ['tools']
 
 export const STATUS_ROUTE = '/api/dsh-academic/status'
+export const KEYS_ROUTE = '/api/dsh-academic/keys'
 
 export interface Config {
   zotero?: boolean
@@ -76,8 +78,8 @@ export const Config: z<Config> = z.object({
     'en-US': { $description: 'Where the library is read: auto (the Zotero on this computer, zotero.org when it cannot be reached and a key is set), local, cloud' },
   }),
   zoteroApiKey: z.string().role('secret').default('').volatile().i18n({
-    'zh-CN': { $description: 'zotero.org 的 API 密钥（在 zotero.org/settings/keys 创建）。填写后，Zotero 没有运行时也能访问已同步的文库' },
-    'en-US': { $description: 'API key for zotero.org (create one at zotero.org/settings/keys). With it the synced library is reachable while Zotero is not running' },
+    'zh-CN': { $description: '旧版本存放 zotero.org API 密钥的位置。密钥现在保存在凭据存储里，请在 设置 → 学术 中填写；这里的值会在启动时被移走' },
+    'en-US': { $description: 'Where earlier versions kept the zotero.org API key. Keys now live in the credential store; enter them in Settings > 学术. A value here is moved away at start' },
   }),
   zoteroAutoStart: z.boolean().default(DEFAULTS.zoteroAutoStart).volatile().i18n({
     'zh-CN': { $description: '需要用到本机 Zotero 而它没有运行时，自动启动并最小化到任务栏' },
@@ -120,16 +122,16 @@ export const Config: z<Config> = z.object({
     'en-US': { $description: 'Contact e-mail (optional), sent to Crossref, OpenAlex, NCBI, Europe PMC and Unpaywall for friendlier limits; Unpaywall is only asked when it is set' },
   }),
   s2Key: z.string().role('secret').default('').volatile().i18n({
-    'zh-CN': { $description: 'Semantic Scholar API Key（可选）。不填时使用公共额度，经常被限流' },
-    'en-US': { $description: 'Semantic Scholar API key (optional). Without it the shared pool is often rate limited' },
+    'zh-CN': { $description: '旧版本存放 Semantic Scholar API Key 的位置；密钥现在保存在凭据存储里，请在 设置 → 学术 中填写' },
+    'en-US': { $description: 'Where earlier versions kept the Semantic Scholar key; keys now live in the credential store (Settings > 学术)' },
   }),
   openalexKey: z.string().role('secret').default('').volatile().i18n({
-    'zh-CN': { $description: 'OpenAlex API Key（可选）' },
-    'en-US': { $description: 'OpenAlex API key (optional)' },
+    'zh-CN': { $description: '旧版本存放 OpenAlex API Key 的位置；密钥现在保存在凭据存储里，请在 设置 → 学术 中填写' },
+    'en-US': { $description: 'Where earlier versions kept the OpenAlex key; keys now live in the credential store (Settings > 学术)' },
   }),
   ncbiKey: z.string().role('secret').default('').volatile().i18n({
-    'zh-CN': { $description: 'NCBI（PubMed）API Key（可选）' },
-    'en-US': { $description: 'NCBI (PubMed) API key (optional)' },
+    'zh-CN': { $description: '旧版本存放 NCBI（PubMed）API Key 的位置；密钥现在保存在凭据存储里，请在 设置 → 学术 中填写' },
+    'en-US': { $description: 'Where earlier versions kept the NCBI (PubMed) key; keys now live in the credential store (Settings > 学术)' },
   }),
   maxResults: z.natural().min(1).max(100).default(DEFAULTS.maxResults).volatile().i18n({
     'zh-CN': { $description: '单次检索最多返回的条目数' },
@@ -153,7 +155,10 @@ export const Config: z<Config> = z.object({
 interface AgentLike { readonly session: { id?: string } }
 
 export function apply(ctx: Context, config: Config = {}): void {
-  const settings = (): Settings => resolveConfig(config)
+  // API keys are kept out of the settings (a profile backup carries those as they are) and laid over them here.
+  const keyFile = fileApiKeyStore(resolveDataDir())
+  const keys = new Keys(keyFile)
+  const settings = (): Settings => keys.apply(resolveConfig(config))
   let writer: ZoteroWriter | undefined
   const launcher = createLauncher({ enabled: () => settings().zoteroAutoStart, path: () => settings().zoteroPath })
   const client = new ZoteroClient(() => settings().zoteroBaseUrl, undefined, () => writer?.forget(), {
@@ -197,6 +202,38 @@ export function apply(ctx: Context, config: Config = {}): void {
     }
   }, 'academic: tools')
 
+  // Keys: read what is stored, then take over any key an earlier version left in the settings and
+  // remove it from there. Without the settings service the key stays where it is and still works.
+  type SettingsService = { mutate(ns: string, ops: Array<{ op: 'unset'; path: string[] }>): Promise<unknown> }
+  let settingsService: SettingsService | undefined
+  let adopting: Promise<void> = Promise.resolve()
+  const adopt = (): void => {
+    adopting = adopting.then(async () => {
+      if (disposed) return
+      const fields = await keys.adopt(resolveConfig(config))
+      if (fields.length > 0 && settingsService !== undefined) await settingsService.mutate(ENTRY_ID, fields.map(field => ({ op: 'unset' as const, path: [field] })))
+    }).catch((error: unknown) => { ctx.logger.warn(`could not move API keys out of the settings: ${error instanceof Error ? error.message : String(error)}`) })
+  }
+  let keysReady: Promise<void> = keys.load().catch(() => {}).then(adopt)
+  settingsListeners.add(adopt)
+  // The credential store is a service of its own and may come up after this plugin: until then, and on
+  // hosts without it, the keys are in the plugin's private file; once it is there they move into it.
+  ctx.inject(['credentials'], (credentialsCtx: Context) => {
+    const service = (credentialsCtx as unknown as { credentials: unknown }).credentials
+    if (!hasRecordApi(service)) return
+    const store = layeredKeyStore(credentialKeyStore(service), keyFile)
+    keysReady = keysReady.then(async () => {
+      const held = keys.configured()
+      await keys.use(store)
+      // A key that was only in the file is written through the layered store, which puts it in the credential store.
+      for (const name of KEY_NAMES) if (held[name]) { const value = await keyFile.get(name); if (value !== undefined) await keys.set(name, value).catch(() => {}) }
+    }).catch(() => {}).then(adopt)
+  })
+  ctx.inject(['settings'], (settingsCtx: Context) => {
+    settingsService = (settingsCtx as unknown as { settings: SettingsService }).settings
+    void keysReady.then(adopt)
+  })
+
   // A change to the library goes through DSH's own approval prompt.
   const writeNames = new Set<string>(WRITE_TOOLS)
   ctx.on('tools/pre-execute', async (exec, next) => {
@@ -221,6 +258,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const handler = async (_req: IncomingMessage, res: ServerResponse): Promise<void> => {
       let body: unknown
       try {
+        await keysReady
         // Looking at the settings page must not start Zotero: both sides are asked directly.
         const now = settings()
         const top = `${libraryPath(libraryOf(now.zoteroLibrary))}/items/top`
@@ -241,7 +279,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         }
         const program = now.zoteroSource === 'cloud' ? undefined : await findZotero(now.zoteroPath).catch(() => undefined)
         const browserProgram = now.browser ? await findBrowser(now.browserPath).catch(() => undefined) : undefined
-        body = { ok: true, zotero: { ...probe, ...(items === undefined ? {} : { items }) }, cloud, program: program !== undefined, browser: browserProgram === undefined ? '' : browserProgram.replace(/^.*[\\/]/, ''), ...(client.startError === undefined ? {} : { startError: client.startError }), skills: bundledSkills.map(skill => ({ name: skill.name, description: skill.description })), skillsRegistered }
+        body = { ok: true, zotero: { ...probe, ...(items === undefined ? {} : { items }) }, cloud, keys: keys.configured(), program: program !== undefined, browser: browserProgram === undefined ? '' : browserProgram.replace(/^.*[\\/]/, ''), ...(client.startError === undefined ? {} : { startError: client.startError }), skills: bundledSkills.map(skill => ({ name: skill.name, description: skill.description })), skillsRegistered }
       } catch (error) {
         body = { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
@@ -249,6 +287,39 @@ export function apply(ctx: Context, config: Config = {}): void {
       res.end(JSON.stringify(body))
     }
     webCtx.effect(() => webCtx.webServer.register({ kind: 'exact', path: STATUS_ROUTE, handler }), `academic: ${STATUS_ROUTE}`)
+
+    // Set or clear one key from the settings page. The value goes one way: nothing here hands a key back.
+    const keyHandler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      const reply = (status: number, body: unknown): void => {
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify(body))
+      }
+      try {
+        if (req.method !== 'POST') { reply(405, { ok: false, error: 'POST only' }); return }
+        const { origin, host } = req.headers
+        if (origin !== undefined && host !== undefined && origin !== `http://${host}` && origin !== `https://${host}`) { reply(403, { ok: false, error: 'origin rejected' }); return }
+        if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) { reply(415, { ok: false, error: 'JSON only' }); return }
+        const chunks: Buffer[] = []
+        let size = 0
+        for await (const chunk of req) {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string)
+          size += buffer.byteLength
+          if (size > 4_096) { reply(413, { ok: false, error: 'too large' }); return }
+          chunks.push(buffer)
+        }
+        const input = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { name?: unknown; value?: unknown }
+        if (!isKeyName(input.name) || typeof input.value !== 'string') { reply(400, { ok: false, error: 'name and value are required' }); return }
+        await keysReady
+        if (input.value.trim() === '') await keys.unset(input.name)
+        else await keys.set(input.name, input.value)
+        // The tools and the prompt read the keys through the settings: tell them something changed.
+        sync()
+        reply(200, { ok: true, keys: keys.configured() })
+      } catch (error) {
+        reply(400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    webCtx.effect(() => webCtx.webServer.register({ kind: 'exact', path: KEYS_ROUTE, handler: keyHandler }), `academic: ${KEYS_ROUTE}`)
   })
 
   // The bundled skills; optional so a host without a skill registry still loads the tools.

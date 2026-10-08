@@ -176,7 +176,11 @@ export function createPaperTools(host: PaperHost): ToolDefinition[] {
       if (input.open_access === true) papers = papers.filter(paper => paper.pdfUrl !== undefined || paper.openAccess === true)
       papers = papers.slice(0, limit)
       const answered = asked.filter((_source, index) => lists[index]!.length > 0).map(source => SOURCE_NAMES[source])
-      const skipped = failed.length > 0 ? `\nNot answered: ${failed.join('; ')}.` : ''
+      // arXiv, asked for the newest, wants every word of the query in the title or abstract; a long query finds nothing.
+      const arxivAt = asked.indexOf('arxiv')
+      const noPreprints = newest && arxivAt !== -1 && lists[arxivAt]!.length === 0 && !failed.some(entry => entry.startsWith('arXiv'))
+        ? '\narXiv has no recent paper containing all of these words. For the newest preprints ask again with two or three keywords.' : ''
+      const skipped = `${failed.length > 0 ? `\nNot answered: ${failed.join('; ')}.` : ''}${noPreprints}`
       if (papers.length === 0) {
         return { text: `No papers found for "${text}" in ${asked.map(source => SOURCE_NAMES[source]).join(', ')}.${skipped} Try fewer or different words; this does not mean no such paper exists.` }
       }

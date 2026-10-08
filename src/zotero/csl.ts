@@ -68,7 +68,8 @@ export function itemFromCsl(csl: Csl, doi: string): NewItem {
     creators: [...people(csl.author, itemType === 'computerProgram' ? 'programmer' : 'author'), ...(itemType === 'book' ? people(csl.editor, 'editor') : [])],
   }
   const set = (field: string, value: string | undefined): void => { if (value) item[field] = value }
-  set('abstractNote', csl.abstract === undefined ? undefined : stripTags(csl.abstract))
+  // Publishers deposit the heading with the text: "<jats:title>Abstract</jats:title><jats:p>…".
+  set('abstractNote', csl.abstract === undefined ? undefined : stripTags(csl.abstract.replace(/^\s*<jats:title>[^<]{0,30}<\/jats:title>/i, '')).replace(/^(Abstract|Summary)[\s:.]+(?=[A-Z])/, ''))
   set('date', dateOf(csl))
   set('url', `https://doi.org/${doi}`)
   set('language', csl.language)
