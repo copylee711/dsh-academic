@@ -4,7 +4,7 @@
 
 DeepSeek Harness 的学术插件，三部分：
 
-- **Zotero**：AI 检索你电脑上的 Zotero 文库，读取条目和你在 PDF 里做的批注，阅读全文，导出引文；开启写入后可按 DOI / arXiv 编号入库、写笔记、整理标签和分类。
+- **Zotero**：AI 检索你的 Zotero 文库，读取条目和你在 PDF 里做的批注，阅读全文，导出引文；开启写入后可按 DOI / arXiv 编号入库、写笔记、整理标签和分类。优先连接本机的 Zotero，没有运行时自动启动；也可以通过 zotero.org 访问已同步的文库。
 - **论文检索**：同时查询 arXiv、OpenAlex、Crossref、Semantic Scholar、PubMed、Europe PMC、DBLP，阅读开放获取的全文，从 DOI 注册机构取引文，核验参考文献是否真实存在。
 - **学术技能**：内置 11 个技能，覆盖文献综述、论文精读、写作、润色、模拟审稿、回复审稿意见等。
 
@@ -36,13 +36,22 @@ DeepSeek Harness 的学术插件，三部分：
 | 笔记 | 在条目下新建笔记、新建独立笔记，或向已有笔记追加内容（用 Markdown 书写） |
 | 整理 | 增删标签、移入移出分类、新建分类 |
 
-入库、笔记、整理三项默认关闭，需要 Zotero 10 或更高版本。插件不提供删除条目的功能。
+入库、笔记、整理三项默认关闭。插件不提供删除条目的功能。
+
+文库有两个来源：
+
+| 来源 | 需要 | 能看到的内容 | 写入 |
+|---|---|---|---|
+| 本机 Zotero | Zotero 7 或更高，开启本地 API | 整个文库，包括尚未同步的内容和本地的 PDF | 需要 Zotero 10 或更高；首次写入时 Zotero 弹窗确认 |
+| zotero.org | 在设置里填写 API 密钥 | 已同步的内容；PDF 全文只有存放在 Zotero 云端存储时才能读（WebDAV 同步的读不到） | 密钥有写入权限即可 |
+
+默认为“自动”：先连本机 Zotero；它没有运行时自动启动（窗口立刻最小化到任务栏，不抢焦点）；启动不了且填了密钥时，改用 zotero.org，结果里会注明来自已同步的副本。已存搜索只能由本机 Zotero 执行。
 
 ### 论文检索
 
 | 功能 | 说明 |
 |---|---|
-| 多源检索 | 一次查询多个数据源，同一篇论文（预印本与正式发表版、不同数据源的记录）合并为一条；可按年份、开放获取、arXiv 分类筛选，按相关度、时间或被引数排序 |
+| 多源检索 | 一次查询多个数据源，同一篇论文（预印本与正式发表版、不同数据源的记录）合并为一条；可按年份、开放获取、arXiv 分类筛选，按相关度、时间或被引数排序。按时间排序时只在近两年（或指定年份起）的相关论文里排，并剔除出版年份在未来的错误记录 |
 | 论文详情 | 按 DOI、arXiv 编号、PMID、PMCID 或标题查一篇论文：完整摘要、作者、期刊、被引数、开放获取链接、是否已撤稿 |
 | 引用关系 | 谁引用了它、它引用了谁、相关论文 |
 | 阅读全文 | arXiv 论文读 HTML 版（保留章节结构，公式为 LaTeX），PubMed Central 文章读结构化全文，其余读开放获取 PDF；可先看目录再读某一节，或按问题找段落 |
@@ -80,7 +89,7 @@ DSH 桌面版：**插件 → 添加插件**，输入 `@copylee/dsh-academic`，�
 dsh plugin --profile web add @copylee/dsh-academic@latest
 ```
 
-要求：DSH 0.2.0-rc.2 或更高。使用 Zotero 功能需要 Zotero 7 或更高（写入需要 Zotero 10），并在 Zotero 的 **设置 → 高级** 中勾选“允许此计算机上的其他应用程序与 Zotero 通讯”，且 Zotero 处于运行状态。论文检索需要能访问相应的学术网站；如需代理，使用 DSH 的全局代理设置。
+要求：DSH 0.2.0-rc.2 或更高。使用本机 Zotero 需要 Zotero 7 或更高（写入需要 Zotero 10），并在 Zotero 的 **设置 → 高级** 中勾选“允许此计算机上的其他应用程序与 Zotero 通讯”；Zotero 不必事先打开，用到时会自动启动（自动最小化目前只在 Windows 和 macOS 上做）。只用 zotero.org 时不需要安装 Zotero。论文检索需要能访问相应的学术网站；如需代理，使用 DSH 的全局代理设置。
 
 ## 使用
 
@@ -106,7 +115,7 @@ dsh plugin --profile web add @copylee/dsh-academic@latest
 | `zotero_get` | 一个条目的全部元数据，以及它的笔记、附件、PDF 批注 |
 | `zotero_read` | 读文库中论文的正文：分段读取，或按问题返回最相关的段落 |
 | `zotero_export` | 导出 BibTeX / BibLaTeX / RIS / CSL JSON，或格式化的参考文献与文内引用 |
-| `zotero_attachment` | 附件在本机的文件路径，或网页链接附件的 URL |
+| `zotero_attachment` | 附件在本机的文件路径，或网页链接附件的 URL（路径只有本机 Zotero 能给出） |
 | `zotero_add` | 按 DOI / arXiv 编号入库（需开启写入） |
 | `zotero_note` | 新建或追加笔记（需开启写入） |
 | `zotero_organize` | 增删标签、调整分类、新建分类（需开启写入） |
@@ -128,6 +137,10 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 |---|---|---|
 | 启用 Zotero 工具 | 开 | 关闭后 AI 看不到任何 Zotero 工具 |
 | 允许修改文库 | 关 | 开启后提供入库、笔记、整理三个工具 |
+| 文库来源 | 自动 | 自动：本机优先，连不上时用 zotero.org；仅本机；仅在线 |
+| 自动启动 Zotero | 开 | 用到本机 Zotero 而它没有运行时启动它，窗口最小化到任务栏，用完不关闭 |
+| Zotero 程序路径 | 空 | 自动查找失败时才需要填写 |
+| zotero.org API 密钥 | 空 | 在 zotero.org/settings/keys 创建；读文库勾选 library access，读云端 PDF 勾选 file access，修改文库勾选 write access |
 | 默认文库 | `user` | `user` 为“我的文库”，群组文库填数字 ID |
 | 本地服务地址 | `http://127.0.0.1:23119` | 只接受本机地址 |
 | 启用论文工具 | 开 | 关闭后 AI 看不到 `paper_` 和 `reference_verify` 工具 |
@@ -139,14 +152,16 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 | 单次检索条目数上限 | 20 | 一次检索最多返回的条目数 |
 | 启用内置技能 | 开 | 可逐个开关 |
 
-设置页顶部显示 Zotero 的连接状态、版本、是否支持写入。
+设置页顶部显示本机 Zotero 的连接状态、版本、是否支持写入；填了密钥时还显示 zotero.org 的连接状态和密钥权限。
 
 ## 修改 Zotero 文库时的确认
 
 每次修改有两道确认：
 
 1. DSH 的审批提示，说明要做什么（会话的审批策略设为不询问时跳过）。
-2. Zotero 自己的授权弹窗。选“允许”只对这一次修改有效，下次还会弹出；选“始终允许”后不再弹出，可以在 Zotero 的设置里撤销。
+2. Zotero 自己的授权弹窗。选“允许”只对这一次修改有效，下次还会弹出；选“始终允许”后不再弹出，可以在 Zotero 的设置里撤销。Zotero 是被自动启动的话，窗口在任务栏里，弹窗没有出现在眼前时去那里看。
+
+通过 zotero.org 修改文库时没有第二道确认，凭密钥的写入权限执行。
 
 修改条目时带上读取时的版本号，文库在此期间被改动过则放弃本次修改。
 
@@ -158,13 +173,16 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 - DBLP 在部分网络环境下要求浏览器验证，无法通过接口访问，因此默认不启用。
 - 没有接入知网、万方、百度学术（它们不提供公开接口）。中文期刊只能查到 OpenAlex 和 Crossref 收录的部分。
 - 参考文献核验依赖 Crossref、OpenAlex 和 arXiv 的收录；查不到不等于文献不存在（书籍、中文文献、会议论文集常常查不到），结果里会区分“未找到”和“有出入”。
-- Zotero 7 到 9 的本地 API 只读，入库、笔记、整理不可用。附件文件尚未下载到本机时无法阅读。
+- Zotero 7 到 9 的本地 API 只读，入库、笔记、整理不可用（可改用 zotero.org 密钥写入）。附件文件尚未下载到本机时无法阅读。
+- Zotero 没有无窗口运行方式，自动启动的 Zotero 会留在任务栏。本地 API 开关必须事先在 Zotero 里开启，插件无法代为开启。Linux 上自动启动的窗口不会最小化。
+- zotero.org 上的文库是同步后的副本：刚在本机做的改动、未同步的条目、WebDAV 上的附件都不在其中；它有请求限速，比本机慢。
 - Zotero 入库只接受 DOI 和 arXiv 编号，不支持直接导入 BibTeX、ISBN 或网页，也不会下载 PDF 文件到 Zotero。
 - 改编自 nature-skills 的技能中提到的画图、PPT、下载器等配套技能没有内置；其中两个可选的 Python 检查脚本随包附带，但只有本机装了 Python 才能运行。
 
 ## 数据与隐私
 
-- 读取 Zotero 时，数据只在本机的 Zotero（`127.0.0.1`）和 DSH 之间传递，随后作为工具结果发给你在 DSH 里配置的模型。
+- 读取本机 Zotero 时，数据只在本机的 Zotero（`127.0.0.1`）和 DSH 之间传递，随后作为工具结果发给你在 DSH 里配置的模型。
+- 填写了 zotero.org 密钥并用到在线文库时，请求发往 `api.zotero.org`，附件文件从 Zotero 的存储服务下载；密钥只发给 `api.zotero.org`。文库来源设为“仅本机”时不会访问它。
 - 论文检索把检索词、DOI 等标识符发给被查询的数据源：`export.arxiv.org`、`arxiv.org`、`ar5iv.labs.arxiv.org`、`api.openalex.org`、`api.crossref.org`、`api.semanticscholar.org`、`eutils.ncbi.nlm.nih.gov`、`www.ebi.ac.uk`（Europe PMC）、`dblp.org`、`doi.org`、`api.unpaywall.org`（仅在填写邮箱后），以及这些数据源给出的开放获取 PDF 所在的网站。
 - 联系邮箱只发给 Crossref、OpenAlex、NCBI、Europe PMC 和 Unpaywall。API Key 只发给各自的服务。
 - 读过的论文全文缓存在 `~/.dsh/storages/copylee-academic/papers/`。
@@ -172,7 +190,7 @@ Zotero 条目用 `zotero://user/0/item/<KEY>`（群组为 `zotero://group/<id>/i
 
 ## 工作原理
 
-Zotero 部分通过它的本地 API（`http://127.0.0.1:23119/api/`，与 Zotero Web API v3 同构）读写文库；引文导出和格式化由 Zotero 完成。全文来自 Zotero 的全文索引或本机 PDF。
+Zotero 部分通过它的本地 API（`http://127.0.0.1:23119/api/`，与 Zotero Web API v3 同构）读写文库；引文导出和格式化由 Zotero 完成。全文来自 Zotero 的全文索引或本机 PDF。在线文库走 zotero.org 的 Web API（`https://api.zotero.org`），路径相同，只是把 `users/0` 换成密钥所属用户的 ID，所以两边共用同一套工具。本机 Zotero 没有应答时，Windows 上用一段 PowerShell 启动它并在窗口出现的瞬间最小化、把焦点还给原窗口；macOS 上用 `open -g -j`。
 
 论文检索直接调用各数据源的公开接口，结果统一为同一种记录，按 DOI、arXiv 编号、PMID 和标题合并，再用倒数排名融合排序。每个数据源按其要求限速（arXiv 每 3 秒一次），遇到 429 / 503 按 `Retry-After` 重试。全文按 arXiv HTML → ar5iv → PubMed Central → 开放获取 PDF 的顺序获取，PDF 用 pdf.js 提取文字。按问题找段落时用 BM25 排序，分词使用 `Intl.Segmenter`，中文也按词切分。
 

@@ -20,10 +20,11 @@ import { TextCache } from './fulltext/resolve.js'
 import { createHttp } from './net/http.js'
 import { promptText } from './prompt.js'
 import { createPaperTools } from './search/tools.js'
-import { ALL_SOURCES, DEFAULTS, resolveConfig, type Settings } from './settings.js'
+import { ALL_SOURCES, DEFAULTS, resolveConfig, ZOTERO_SOURCES, type Settings } from './settings.js'
 import { resolveDataDir } from './storage.js'
 import { fileKeyStore, ZoteroWriter } from './zotero/auth.js'
 import { ZoteroClient } from './zotero/client.js'
+import { createLauncher, findZotero } from './zotero/launch.js'
 import { libraryOf, libraryPath } from './zotero/refs.js'
 import { createReadTools } from './zotero/tools.js'
 import { createWriteTools, WRITE_TOOLS } from './zotero/write-tools.js'
@@ -37,6 +38,10 @@ export const STATUS_ROUTE = '/api/dsh-academic/status'
 
 export interface Config {
   zotero?: boolean
+  zoteroSource?: string
+  zoteroApiKey?: string
+  zoteroAutoStart?: boolean
+  zoteroPath?: string
   zoteroBaseUrl?: string
   zoteroLibrary?: string
   zoteroWrite?: boolean
@@ -59,8 +64,24 @@ export const Config: z<Config> = z.object({
     'en-US': { $description: 'Enable the Zotero tools: search the library, read items, annotations and full text, export citations' },
   }),
   zoteroWrite: z.boolean().default(DEFAULTS.zoteroWrite).volatile().i18n({
-    'zh-CN': { $description: '允许修改 Zotero 文库（按 DOI / arXiv 入库、写笔记、改标签与分类）。需要 Zotero 10 或更高版本；每次修改都会先征得你的同意' },
-    'en-US': { $description: 'Allow changes to the Zotero library (add by DOI / arXiv id, notes, tags, collections). Needs Zotero 10 or later; every change asks you first' },
+    'zh-CN': { $description: '允许修改 Zotero 文库（按 DOI / arXiv 入库、写笔记、改标签与分类）。本机 Zotero 需要 10 或更高版本，在线文库需要密钥有写入权限；每次修改都会先征得你的同意' },
+    'en-US': { $description: 'Allow changes to the Zotero library (add by DOI / arXiv id, notes, tags, collections). The local Zotero must be 10 or later, the online library needs a key with write access; every change asks you first' },
+  }),
+  zoteroSource: z.union(ZOTERO_SOURCES.map(source => z.const(source))).default(DEFAULTS.zoteroSource).volatile().i18n({
+    'zh-CN': { $description: '文库来源：auto（优先本机 Zotero，连不上且填了密钥时改用 zotero.org）、local（只用本机）、cloud（只用 zotero.org）' },
+    'en-US': { $description: 'Where the library is read: auto (the Zotero on this computer, zotero.org when it cannot be reached and a key is set), local, cloud' },
+  }),
+  zoteroApiKey: z.string().role('secret').default('').volatile().i18n({
+    'zh-CN': { $description: 'zotero.org 的 API 密钥（在 zotero.org/settings/keys 创建）。填写后，Zotero 没有运行时也能访问已同步的文库' },
+    'en-US': { $description: 'API key for zotero.org (create one at zotero.org/settings/keys). With it the synced library is reachable while Zotero is not running' },
+  }),
+  zoteroAutoStart: z.boolean().default(DEFAULTS.zoteroAutoStart).volatile().i18n({
+    'zh-CN': { $description: '需要用到本机 Zotero 而它没有运行时，自动启动并最小化到任务栏' },
+    'en-US': { $description: 'Start Zotero, minimized, when a tool needs it and it is not running' },
+  }),
+  zoteroPath: z.string().default('').volatile().i18n({
+    'zh-CN': { $description: 'Zotero 程序的路径。留空时自动查找' },
+    'en-US': { $description: 'Path of the Zotero program. Found automatically when empty' },
   }),
   zoteroLibrary: z.string().default(DEFAULTS.zoteroLibrary).volatile().i18n({
     'zh-CN': { $description: '默认文库：user（我的文库）或群组的数字 ID' },
@@ -122,7 +143,12 @@ interface AgentLike { readonly session: { id?: string } }
 export function apply(ctx: Context, config: Config = {}): void {
   const settings = (): Settings => resolveConfig(config)
   let writer: ZoteroWriter | undefined
-  const client = new ZoteroClient(() => settings().zoteroBaseUrl, undefined, () => writer?.forget())
+  const launcher = createLauncher({ enabled: () => settings().zoteroAutoStart, path: () => settings().zoteroPath })
+  const client = new ZoteroClient(() => settings().zoteroBaseUrl, undefined, () => writer?.forget(), {
+    source: () => settings().zoteroSource,
+    cloudKey: () => settings().zoteroApiKey,
+    launcher,
+  })
   writer = new ZoteroWriter(client, fileKeyStore(resolveDataDir()))
   const host = { client, settings }
   const readTools = createReadTools(host)
@@ -181,12 +207,26 @@ export function apply(ctx: Context, config: Config = {}): void {
     const handler = async (_req: IncomingMessage, res: ServerResponse): Promise<void> => {
       let body: unknown
       try {
-        const probe = await client.probe()
+        // Looking at the settings page must not start Zotero: both sides are asked directly.
+        const now = settings()
+        const top = `${libraryPath(libraryOf(now.zoteroLibrary))}/items/top`
+        const probe = now.zoteroSource === 'cloud' ? { running: false, writable: false } : await client.probe()
         let items: number | undefined
         if (probe.running && probe.error === undefined) {
-          items = (await client.json(`${libraryPath(libraryOf(settings().zoteroLibrary))}/items/top`, { limit: 1 }).catch(() => undefined))?.total
+          items = (await client.json(top, { limit: 1 }, undefined, 'local').catch(() => undefined))?.total
         }
-        body = { ok: true, zotero: { ...probe, ...(items === undefined ? {} : { items }) }, skills: bundledSkills.map(skill => ({ name: skill.name, description: skill.description })), skillsRegistered }
+        let cloud: Record<string, unknown> = { configured: now.zoteroApiKey !== '' }
+        if (now.zoteroApiKey !== '' && now.zoteroSource !== 'local') {
+          try {
+            const account = await client.cloudAccount()
+            const count = (await client.json(top, { limit: 1 }, undefined, 'cloud').catch(() => undefined))?.total
+            cloud = { configured: true, ok: true, username: account.username, library: account.library, write: account.write, files: account.files, ...(count === undefined ? {} : { items: count }) }
+          } catch (error) {
+            cloud = { configured: true, ok: false, error: error instanceof Error ? error.message : String(error) }
+          }
+        }
+        const program = now.zoteroSource === 'cloud' ? undefined : await findZotero(now.zoteroPath).catch(() => undefined)
+        body = { ok: true, zotero: { ...probe, ...(items === undefined ? {} : { items }) }, cloud, program: program !== undefined, ...(client.startError === undefined ? {} : { startError: client.startError }), skills: bundledSkills.map(skill => ({ name: skill.name, description: skill.description })), skillsRegistered }
       } catch (error) {
         body = { ok: false, error: error instanceof Error ? error.message : String(error) }
       }

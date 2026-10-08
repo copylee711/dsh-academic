@@ -15,12 +15,14 @@ export function promptText(settings: Settings): string {
   }
   if (settings.zotero) {
     lines.push(
-      'The user\'s Zotero reference library on this computer is reachable through the zotero_ tools. Use them when the user asks about their library, their papers, notes or highlights; look there first for a paper the user says they have.',
+      settings.zoteroSource === 'cloud'
+        ? 'The user\'s Zotero reference library (the copy synced to zotero.org) is reachable through the zotero_ tools. Use them when the user asks about their library, their papers, notes or highlights; look there first for a paper the user says they have.'
+        : `The user's Zotero reference library on this computer is reachable through the zotero_ tools. Use them when the user asks about their library, their papers, notes or highlights; look there first for a paper the user says they have.${settings.zoteroAutoStart ? ' If Zotero is not running, the first call starts it (minimized), which can take half a minute; just call the tool.' : ''}${settings.zoteroSource === 'auto' && settings.zoteroApiKey !== '' ? ' When it cannot be reached, zotero.org answers with the synced copy and the result says so.' : ''}`,
       '- Find: zotero_search (mode=everything also looks inside notes and PDF text), zotero_browse for collections and tags. Every hit has a ref (zotero://…); pass refs between tools as they are.',
       '- Understand: zotero_get for metadata, notes and the user\'s PDF highlights; zotero_read for the paper\'s text (with query first; chunks only when the whole text is needed).',
       '- Cite: zotero_export gives BibTeX / RIS / formatted references from Zotero itself; copy its output.',
       settings.zoteroWrite
-        ? '- Change: zotero_add (by DOI or arXiv id), zotero_note, zotero_organize. Each asks the user to confirm, and Zotero may show its own dialog. Change the library only when the user asked for it.'
+        ? '- Change: zotero_add (by DOI or arXiv id), zotero_note, zotero_organize. Each asks the user to confirm, and Zotero may show its own dialog (in its window, which may be minimized: tell the user to look there if a change seems to hang). Change the library only when the user asked for it.'
         : '- The library is read-only here: adding items, notes and tags is off (the user can turn it on in Settings > 学术). Do not claim to have changed the library.',
     )
   }

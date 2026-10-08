@@ -43,7 +43,7 @@ export class ZoteroWriter {
 
   private async authorize(signal?: AbortSignal): Promise<string> {
     // The user answers a dialog in Zotero, so this waits far longer than a normal request.
-    const response = await this.client.request('local/authorize', { method: 'POST', body: { appName: APP_NAME }, signal, timeoutMs: 180_000 })
+    const response = await this.client.request('local/authorize', { via: 'local', method: 'POST', body: { appName: APP_NAME }, signal, timeoutMs: 180_000 })
     const body = JSON.parse(response.text) as { key?: string; remember?: boolean }
     if (!body.key) throw new ZoteroError('DENIED')
     this.key = body.key
@@ -69,9 +69,11 @@ export class ZoteroWriter {
   /** One write, after any other in flight. Asks the user in Zotero when there is no usable key. */
   write(path: string, request: ZoteroRequest & { method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' }): Promise<ZoteroResponse> {
     return this.queue.run(async () => {
+      // zotero.org takes the user's own API key; there is no dialog to answer.
+      if (await this.client.ready(request.signal) === 'cloud') return await this.client.request(path, { ...request, via: 'cloud' })
       const send = async (key: string): Promise<ZoteroResponse> => {
         try {
-          return await this.client.request(path, { ...request, headers: { ...request.headers, 'Zotero-API-Key': key } })
+          return await this.client.request(path, { ...request, via: 'local', headers: { ...request.headers, 'Zotero-API-Key': key } })
         } finally {
           // A one-time key is spent by the write it went with.
           if (!this.lasting) this.key = undefined

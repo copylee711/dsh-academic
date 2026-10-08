@@ -6,7 +6,7 @@ import { access, readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineTool, type ToolCallView } from '@deepseek-ai/dsh-tools'
-import { joinPages, pdfFileText } from '../fulltext/pdf.js'
+import { joinPages, pdfFileText, pdfText } from '../fulltext/pdf.js'
 import { untrusted } from '../net/untrusted.js'
 import type { Settings } from '../settings.js'
 import { ZoteroError, type ZoteroClient } from './client.js'
@@ -21,7 +21,12 @@ export interface ZoteroHost {
   settings(): Settings
   /** Text of a local PDF; replaced in tests. */
   pdfText?(path: string): Promise<string>
+  /** Text of a PDF held in memory (one downloaded from zotero.org); replaced in tests. */
+  pdfData?(data: Uint8Array): Promise<string>
 }
+
+/** Said with a result that came from zotero.org, so a missing recent change is no surprise. */
+export const cloudNote = (host: ZoteroHost): string => (host.client.via === 'cloud' ? ' Answered by zotero.org (the synced copy of the library; the Zotero on this computer is not running).' : '')
 
 export interface Value { text: string }
 
@@ -86,6 +91,8 @@ async function children(host: ZoteroHost, ref: Ref, signal?: AbortSignal, query?
 
 /** Path on disk of a stored attachment, or undefined when Zotero has no file for it. */
 async function attachmentPath(host: ZoteroHost, ref: Ref, signal?: AbortSignal): Promise<string | undefined> {
+  // zotero.org knows nothing of this computer's disk.
+  if (host.client.via === 'cloud') return undefined
   try {
     const url = (await host.client.text(`${libraryPath(ref.library)}/items/${ref.key}/file/view/url`, undefined, signal)).trim()
     return url.startsWith('file:') ? fileURLToPath(url) : undefined
@@ -104,7 +111,7 @@ export function createReadTools(host: ZoteroHost): ToolDefinition[] {
   const texts = new Map<string, FullText>()
 
   const fullText = async (attachment: Item, ref: Ref, signal?: AbortSignal): Promise<FullText> => {
-    const cacheKey = `${client.serverId ?? ''}:${libraryPath(ref.library)}:${attachment.key}:${String(attachment.version ?? '')}`
+    const cacheKey = `${client.via}:${client.serverId ?? ''}:${libraryPath(ref.library)}:${attachment.key}:${String(attachment.version ?? '')}`
     const cached = texts.get(cacheKey)
     if (cached !== undefined) return cached
     let found: FullText | undefined
@@ -121,6 +128,18 @@ export function createReadTools(host: ZoteroHost): ToolDefinition[] {
       }
     } catch (error) {
       if (!(error instanceof ZoteroError && error.code === 'NOT_FOUND')) throw error
+    }
+    if (found === undefined && client.via === 'cloud') {
+      const data = await client.cloudFile(`${libraryPath(ref.library)}/items/${attachment.key}/file`, signal)
+      if (data === undefined) throw new Error('zotero.org has neither indexed text nor the file of this attachment (files are only there when the library syncs them to Zotero storage). Its text can be read once Zotero runs on this computer.')
+      const name = (attachment.data.filename ?? '').toLowerCase()
+      const type = attachment.data.contentType ?? ''
+      if (type === 'application/pdf' || name.endsWith('.pdf')) found = { text: await (host.pdfData ?? pdfText)(data), source: 'the PDF in Zotero\'s online storage' }
+      else if (type.startsWith('text/') || /\.(txt|md|html?)$/.test(name)) {
+        const raw = new TextDecoder().decode(data)
+        found = { text: type.includes('html') || /\.html?$/.test(name) ? htmlToText(raw.replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')) : raw, source: 'the file in Zotero\'s online storage' }
+      } else throw new Error(`This attachment is a ${type || 'file of unknown type'}; its text cannot be read here.`)
+      if (found.text.trim() === '') throw new Error('The PDF has no text layer (it looks like a scan). Its text cannot be read without OCR.')
     }
     if (found === undefined) {
       const path = await attachmentPath(host, { library: ref.library, key: attachment.key }, signal)
@@ -186,6 +205,7 @@ export function createReadTools(host: ZoteroHost): ToolDefinition[] {
       let total: number | undefined
       // A hit in a note, in the text of a PDF or on a tagged highlight is a child item; the answer is the paper it belongs to.
       const lifted = everything || (input.tags?.length ?? 0) > 0
+      try {
       if (!lifted) {
         const page = await client.json<Item[]>(`${scope}/items/top`, { ...filters, ...(input.item_type ? { itemType: input.item_type } : {}), limit, start }, exec.signal)
         items = page.data
@@ -215,12 +235,19 @@ export function createReadTools(host: ZoteroHost): ToolDefinition[] {
         items = all.slice(start, start + limit)
         total = all.length
       }
+      } catch (error) {
+        // zotero.org stores saved searches but does not run them.
+        if (input.saved_search?.trim() && client.via === 'cloud' && error instanceof ZoteroError && ['NOT_FOUND', 'BAD_REQUEST', 'HTTP'].includes(error.code)) {
+          throw new Error('A saved search can only be run by the Zotero on this computer, which is not running; zotero.org does not run saved searches. Search by words, tags or collection instead.')
+        }
+        throw error
+      }
       if (items.length === 0) {
         return { text: `No items${query ? ` match "${query}"` : ''}${where}${start > 0 ? ` from position ${String(start)}` : ''}. ${query && !everything ? 'mode=everything also looks inside notes, abstracts and the text of PDFs. ' : ''}Nothing found here does not mean the paper does not exist.` }
       }
       const shown = `${String(start + 1)}–${String(start + items.length)}`
       const more = total !== undefined && start + items.length < total
-      const head = `Zotero: ${total === undefined ? String(items.length) : String(total)} item${total === 1 ? '' : 's'}${query ? ` for "${query}"` : ''}${where}; showing ${shown}.${more ? ` Next page: start=${String(start + items.length)}.` : ''}`
+      const head = `Zotero: ${total === undefined ? String(items.length) : String(total)} item${total === 1 ? '' : 's'}${query ? ` for "${query}"` : ''}${where}; showing ${shown}.${more ? ` Next page: start=${String(start + items.length)}.` : ''}${cloudNote(host)}`
       return { text: `${head}\n${untrusted(items.map((item, index) => formatHit(item, library, start + index + 1, 200)).join('\n'))}` }
     },
     presentCall: args => ({ card: 'generic', title: `Zotero 检索：${String((args as { query?: string }).query ?? '全部条目').slice(0, 40)}`, kind: 'search' }),
@@ -338,7 +365,7 @@ export function createReadTools(host: ZoteroHost): ToolDefinition[] {
         title = (await getItem(host, { library: ref.library, key: item.data.parentItem }, exec.signal).catch(() => item)).data.title ?? title
       }
       const { text, source } = await fullText(attachment, ref, exec.signal)
-      const head = `"${title || attachment.data.title || '(untitled)'}" — ${String(text.length)} characters, read from ${source}.`
+      const head = `"${title || attachment.data.title || '(untitled)'}" — ${String(text.length)} characters, read from ${source}.${cloudNote(host)}`
       const query = input.query?.trim() ?? ''
       if (query !== '') {
         const found = rankPassages(text, query, Math.min(12, Math.max(1, input.passages ?? 5)))
@@ -418,6 +445,7 @@ export function createReadTools(host: ZoteroHost): ToolDefinition[] {
       for (const file of files) {
         const name = file.data.title || file.data.filename || file.key
         if (file.data.linkMode === 'linked_url') { lines.push(`${name}: web link ${String(file.data.url ?? '')}`); continue }
+        if (client.via === 'cloud') { lines.push(`${name} [${file.data.contentType ?? 'file'}] ${formatRef(ref.library, file.key)}: in the online library; its place on this computer is known only while Zotero runs here. zotero_read can still read its text.`); continue }
         const path = await attachmentPath(host, { library: ref.library, key: file.key }, exec.signal)
         const there = path !== undefined && await access(path).then(() => true, () => false)
         lines.push(`${name} [${file.data.contentType ?? 'file'}] ${formatRef(ref.library, file.key)}: ${path === undefined ? 'no file' : there ? path : `${path} (not on disk: not downloaded yet)`}`)

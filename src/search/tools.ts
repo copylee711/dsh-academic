@@ -24,6 +24,8 @@ export interface PaperHost {
   http: Http
   cache: TextCache
   pdfText(data: Uint8Array): Promise<string>
+  /** The clock; replaced in tests. */
+  now?(): Date
 }
 
 /** What the result card shows: the papers of a search, without their abstracts. */
@@ -123,20 +125,29 @@ export function createPaperTools(host: PaperHost): ToolDefinition[] {
       const limit = Math.min(settings.maxResults, Math.max(1, input.limit ?? Math.min(8, settings.maxResults)))
       const asked = ((input.sources?.length ?? 0) > 0 ? input.sources! : settings.sources).filter((source): source is SourceId => (SOURCE_IDS as readonly string[]).includes(source))
       if (asked.length === 0) throw new Error('No index to search: every source is switched off in Settings > 学术.')
+      const thisYear = (host.now?.() ?? new Date()).getFullYear()
+      const newest = input.sort === 'date'
+      // "Newest" means the recent papers on the topic: without a start year, look at this year and the last.
+      const yearFrom = input.year_from ?? (newest ? thisYear - 1 : undefined)
+      // Registries hold records dated decades ahead (typos, placeholders); a year window must not reach them.
+      const yearTo = yearFrom === undefined && input.year_to === undefined ? undefined : Math.min(input.year_to ?? thisYear + 1, thisYear + 1)
       const query: Query = {
         // "Most cited" is sorted here, over what each index finds relevant: an index sorting by
         // citations returns famous papers that merely mention the words.
         query: text, sort: input.sort === 'citations' ? 'relevance' : input.sort ?? 'relevance',
         // Ask each index for a little more than wanted: after merging, some are the same paper.
         limit: Math.min(50, input.sort === 'citations' ? limit * 5 : asked.length === 1 ? limit : Math.max(5, Math.ceil(limit * 0.8))),
-        ...(input.year_from === undefined ? {} : { yearFrom: input.year_from }), ...(input.year_to === undefined ? {} : { yearTo: input.year_to }),
+        ...(yearFrom === undefined ? {} : { yearFrom }), ...(yearTo === undefined ? {} : { yearTo }),
         ...(input.open_access === true ? { openAccess: true } : {}), ...((input.categories?.length ?? 0) > 0 ? { categories: input.categories! } : {}),
       }
       const reach = reachOf(exec.signal)
       const failed: string[] = []
       const lists = await Promise.all(asked.map(async source => {
         try {
-          return await SEARCHERS[source](query, reach)
+          // Only arXiv's own date order stays on the topic (it wants every word). The others, sorted by
+          // date, return whatever was registered last and mentions one word: ask them for what is
+          // relevant in the window and order that by date here.
+          return await SEARCHERS[source](newest && source !== 'arxiv' ? { ...query, sort: 'relevance', limit: Math.min(50, limit * 3) } : query, reach)
         } catch (error) {
           if (exec.signal.aborted) throw error
           failed.push(`${SOURCE_NAMES[source]} (${why(error)})`)
@@ -144,10 +155,19 @@ export function createPaperTools(host: PaperHost): ToolDefinition[] {
         }
       }))
       let papers = mergeRanked(lists)
+      // A year that has not come yet is a mistake in the record, not a date to show or sort by.
+      const sane = (paper: Paper): boolean => paper.year === undefined || paper.year <= thisYear + 1
+      papers = newest ? papers.filter(sane) : papers.map(paper => { if (sane(paper)) return paper; const { year: _year, date: _date, ...rest } = paper; return rest })
       // A query that is a paper's title wants that paper first, whatever each index ranked above it.
       const wanted = titleKey(text)
       if ((input.sort ?? 'relevance') === 'relevance') papers = [...papers.filter(paper => titleKey(paper.title) === wanted), ...papers.filter(paper => titleKey(paper.title) !== wanted)]
-      if (query.sort === 'date') papers.sort((a, b) => String(b.date ?? b.year ?? '').localeCompare(String(a.date ?? a.year ?? '')))
+      if (newest) {
+        // A cover date still to come (an issue or a book series dated ahead) says the paper is recent, not
+        // when it appeared: such papers go after those dated this month, not above everything.
+        const today = (host.now?.() ?? new Date()).toISOString().slice(0, 10)
+        const when = (paper: Paper): string => { const date = String(paper.date ?? paper.year ?? ''); return date.slice(0, 10) > today || date.slice(0, 4) > today.slice(0, 4) ? today.slice(0, 7) : date }
+        papers.sort((a, b) => when(b).localeCompare(when(a)))
+      }
       if (input.sort === 'citations') papers.sort((a, b) => (b.citations ?? -1) - (a.citations ?? -1))
       if (input.open_access === true) papers = papers.filter(paper => paper.pdfUrl !== undefined || paper.openAccess === true)
       papers = papers.slice(0, limit)
@@ -158,7 +178,7 @@ export function createPaperTools(host: PaperHost): ToolDefinition[] {
       }
       const chars = input.abstract === 'none' ? 0 : input.abstract === 'full' ? 4_000 : 300
       return {
-        text: `${String(papers.length)} papers for "${text}" (from ${answered.join(', ')}).${skipped}\n${CITE}\n${untrusted(papers.map((paper, index) => formatPaper(paper, index + 1, chars)).join('\n'))}`,
+        text: `${String(papers.length)} papers for "${text}" (from ${answered.join(', ')}).${newest ? ` Newest first, among the papers each index finds relevant from ${String(yearFrom)} on.` : ''}${skipped}\n${CITE}\n${untrusted(papers.map((paper, index) => formatPaper(paper, index + 1, chars)).join('\n'))}`,
         papers: papers.map(cardOf),
         label: text,
       }

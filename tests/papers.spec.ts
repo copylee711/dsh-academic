@@ -255,6 +255,26 @@ describe('the paper tools', () => {
     expect(text).toContain('2 papers')
     await expect(run(setup({ sources: [] }).tools, 'paper_search', { query: 'x' })).rejects.toThrow(/every source is switched off/)
   })
+  it('keeps "newest first" on the topic and out of the future', async () => {
+    const works = { message: { items: [
+      { DOI: '10.1000/typo', title: ['Learner profiles'], issued: { 'date-parts': [[2115]] } },
+      { DOI: '10.1000/new', title: ['Transformers this spring'], issued: { 'date-parts': [[2026, 3, 1]] } },
+      { DOI: '10.1000/old', title: ['Transformers last year'], issued: { 'date-parts': [[2025, 6, 1]] } },
+    ] } }
+    const { http, seen } = web(url => (url.host === 'api.crossref.org' ? works : url.host === 'export.arxiv.org' ? ATOM('') : undefined))
+    const tools = createPaperTools({ settings: settings({ sources: ['arxiv', 'crossref'] }), http, cache: new TextCache(undefined), pdfText: async () => '', now: () => new Date('2026-10-07T00:00:00Z') })
+    const text = await run(tools, 'paper_search', { query: 'transformers', sort: 'date', limit: 5 })
+    expect(text).not.toContain('Learner profiles')
+    expect(text.indexOf('this spring')).toBeLessThan(text.indexOf('last year'))
+    expect(text).toContain('Newest first, among the papers each index finds relevant from 2025 on.')
+    const crossref = new URL(seen.find(url => url.includes('api.crossref.org'))!).searchParams
+    // Crossref ranks by relevance inside the window; arXiv keeps its own date order.
+    expect(crossref.get('sort')).toBeNull()
+    expect(crossref.get('filter')).toBe('from-pub-date:2025,until-pub-date:2027')
+    expect(new URL(seen.find(url => url.includes('export.arxiv.org'))!).searchParams.get('sortBy')).toBe('submittedDate')
+    // Sorted another way, the record stays but its impossible year is not shown.
+    expect(await run(tools, 'paper_search', { query: 'transformers', sources: ['crossref'], limit: 5 })).toMatch(/Learner profiles\n\s+id: 10\.1000\/typo/)
+  })
   it('follows citation links through OpenAlex', async () => {
     const { tools, seen } = setup()
     const text = await run(tools, 'paper_citations', { id: '10.5555/3295222.3295349', direction: 'citations', limit: 2 })

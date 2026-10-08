@@ -18,7 +18,7 @@ const S: Record<string, React.CSSProperties> = {
   row: { display: 'grid', gap: 1, padding: '6px 0', borderTop: '1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.15))' },
   title: { fontWeight: 500, color: 'inherit', textDecoration: 'none' },
   facts: { fontSize: 12, color: 'var(--dsw-alias-label-secondary, #666)' },
-  badge: { marginLeft: 6, padding: '0 6px', fontSize: 11, borderRadius: 8, border: `1px solid ${ACCENT}`, color: ACCENT },
+  badge: { display: 'inline-block', whiteSpace: 'nowrap', marginLeft: 6, padding: '0 6px', fontSize: 11, borderRadius: 8, border: `1px solid ${ACCENT}`, color: ACCENT },
   more: { padding: '4px 0', fontSize: 12, background: 'none', border: 'none', color: ACCENT, cursor: 'pointer', textAlign: 'left' },
 }
 

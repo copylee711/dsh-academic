@@ -12,9 +12,21 @@ export const ALL_SOURCES = ['arxiv', 'openalex', 'crossref', 'semanticscholar', 
 
 export const DEFAULT_ZOTERO_URL = 'http://127.0.0.1:23119'
 
+/** Where the Zotero tools read the library: this computer, zotero.org, or this computer first. */
+export const ZOTERO_SOURCES = ['auto', 'local', 'cloud'] as const
+export type ZoteroSource = typeof ZOTERO_SOURCES[number]
+
 export interface Settings {
   /** Register the Zotero tools at all. */
   zotero: boolean
+  /** auto: the Zotero on this computer, and zotero.org when it cannot be reached and a key is set. */
+  zoteroSource: ZoteroSource
+  /** API key for zotero.org (zotero.org/settings/keys); empty means the online library is not used. */
+  zoteroApiKey: string
+  /** Start Zotero when a tool needs it and it is not running. */
+  zoteroAutoStart: boolean
+  /** Path of the Zotero program, when it is not where the system says. */
+  zoteroPath: string
   /** Where Zotero's local server listens. Loopback only. */
   zoteroBaseUrl: string
   /** `user` for the personal library, or a numeric group id. */
@@ -45,6 +57,10 @@ export interface Settings {
 
 export const DEFAULTS: Settings = {
   zotero: true,
+  zoteroSource: 'auto',
+  zoteroApiKey: '',
+  zoteroAutoStart: true,
+  zoteroPath: '',
   zoteroBaseUrl: DEFAULT_ZOTERO_URL,
   zoteroLibrary: 'user',
   zoteroWrite: false,
@@ -100,6 +116,10 @@ export function resolveConfig(raw: unknown): Settings {
     openalexKey: text('openalexKey'),
     ncbiKey: text('ncbiKey'),
     zotero: typeof out.zotero === 'boolean' ? out.zotero : DEFAULTS.zotero,
+    zoteroSource: (ZOTERO_SOURCES as readonly unknown[]).includes(out.zoteroSource) ? out.zoteroSource as ZoteroSource : DEFAULTS.zoteroSource,
+    zoteroApiKey: /^[A-Za-z0-9]{16,64}$/.test(text('zoteroApiKey')) ? text('zoteroApiKey') : '',
+    zoteroAutoStart: typeof out.zoteroAutoStart === 'boolean' ? out.zoteroAutoStart : DEFAULTS.zoteroAutoStart,
+    zoteroPath: text('zoteroPath').replace(/^"(.*)"$/, '$1'),
     zoteroBaseUrl: loopbackUrl(out.zoteroBaseUrl),
     zoteroLibrary: /^\d+$/.test(library) ? library : DEFAULTS.zoteroLibrary,
     zoteroWrite: typeof out.zoteroWrite === 'boolean' ? out.zoteroWrite : DEFAULTS.zoteroWrite,

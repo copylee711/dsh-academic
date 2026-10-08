@@ -31,7 +31,8 @@ interface ClientContext {
   }
 }
 
-interface Status { ok: boolean; error?: string; zotero?: { running: boolean; writable: boolean; version?: string; items?: number; error?: string }; skills?: Array<{ name: string; description: string }>; skillsRegistered?: boolean }
+interface CloudStatus { configured: boolean; ok?: boolean; username?: string; library?: boolean; write?: boolean; files?: boolean; items?: number; error?: string }
+interface Status { ok: boolean; error?: string; zotero?: { running: boolean; writable: boolean; version?: string; items?: number; error?: string }; cloud?: CloudStatus; program?: boolean; startError?: string; skills?: Array<{ name: string; description: string }>; skillsRegistered?: boolean }
 
 const SKILL_LABELS: Record<string, string> = {
   'academic-literature-review': '文献综述',
@@ -99,11 +100,32 @@ function TextField({ value, disabled, placeholder, secret, onCommit }: { value: 
   })
 }
 
-function zoteroLine(status: Status | null): { color: string; text: string } {
+const SOURCE_OPTIONS = [['auto', '自动'], ['local', '仅本机'], ['cloud', '仅在线']] as const
+
+/** The state of the online library, or null when it plays no part. */
+function cloudLine(status: Status | null, settings: Settings): { color: string; text: string } | null {
+  if (settings.zoteroSource === 'local') return null
+  if (settings.zoteroApiKey === '') return settings.zoteroSource === 'cloud' ? { color: '#d33', text: '在线文库：还没有填写 API 密钥。' } : null
+  const cloud = status?.cloud
+  if (cloud === undefined || cloud.ok === undefined) return { color: '#999', text: '在线文库：检查中…' }
+  if (!cloud.ok) return { color: '#d33', text: `在线文库：连接失败。${cloud.error ?? ''}` }
+  if (cloud.library !== true) return { color: '#d33', text: `在线文库：密钥属于 ${cloud.username ?? ''}，但没有读取个人文库的权限。请在 zotero.org/settings/keys 勾选“Allow library access”。` }
+  const items = cloud.items === undefined ? '' : `，${String(cloud.items)} 个条目`
+  return { color: '#2a2', text: `在线文库：已连接 zotero.org（${cloud.username ?? ''}${items}）。${cloud.write === true ? '密钥可写入。' : '密钥只读。'}${cloud.files === true ? '' : '密钥没有文件权限，读不到存放在 Zotero 云端的 PDF。'}` }
+}
+
+function zoteroLine(status: Status | null, settings: Settings): { color: string; text: string } {
   if (status === null) return { color: '#999', text: '检查中…' }
   if (!status.ok || status.zotero === undefined) return { color: '#d33', text: `无法连接到插件：${status.error ?? ''}` }
   const zotero = status.zotero
-  if (!zotero.running) return { color: '#999', text: '未检测到 Zotero。请先启动 Zotero。' }
+  if (settings.zoteroSource === 'cloud') return { color: '#999', text: '本机 Zotero：未使用（文库来源为“仅在线”）。' }
+  if (!zotero.running) {
+    const start = !settings.zoteroAutoStart ? '请先启动 Zotero，或开启下面的“自动启动”。'
+      : status.program !== true ? '没有找到 Zotero 程序，无法自动启动；请在下面填写它的路径。'
+        : status.startError !== undefined ? `上次自动启动没有成功：${status.startError}。`
+          : '用到时会自动启动并最小化到任务栏。'
+    return { color: '#999', text: `本机 Zotero 没有运行。${start}` }
+  }
   if (zotero.error !== undefined) return { color: '#d33', text: 'Zotero 已运行，但本地 API 未开启。请在 Zotero 的 设置 > 高级 中勾选“允许此计算机上的其他应用程序与 Zotero 通讯”。' }
   const version = zotero.version ? ` ${zotero.version}` : ''
   const items = zotero.items === undefined ? '' : `，当前文库 ${String(zotero.items)} 个条目`
@@ -166,12 +188,13 @@ function AcademicSection({ ctx }: { ctx: ClientContext }) {
       setMessage({ kind: 'error', text: `保存失败：${(error as Error).message}` })
     }
     await load()
-    if (key === 'zoteroBaseUrl' || key === 'zoteroLibrary') void refreshStatus()
+    if (['zoteroBaseUrl', 'zoteroLibrary', 'zoteroSource', 'zoteroApiKey', 'zoteroPath', 'zoteroAutoStart'].includes(key)) void refreshStatus()
   }
 
   if (!loaded) return h('div', { style: S.page }, '加载中…')
 
-  const line = zoteroLine(status)
+  const line = zoteroLine(status, settings)
+  const online = cloudLine(status, settings)
   const row = (title: string, hint: string, control: React.ReactNode) => h('div', { style: S.toggleRow },
     h('div', { style: S.toggleText }, title, h('span', { style: { ...S.hint, fontWeight: 400 } }, hint)),
     control,
@@ -191,9 +214,25 @@ function AcademicSection({ ctx }: { ctx: ClientContext }) {
         h('button', { type: 'button', style: S.secondary, disabled: checking, onClick: () => { void refreshStatus() } }, checking ? '检查中…' : '重新检查'),
       ),
       h('div', { style: S.statusLine }, h('span', { style: { ...S.dot, background: line.color } }), h('span', null, line.text)),
+      online === null ? null : h('div', { style: S.statusLine }, h('span', { style: { ...S.dot, background: online.color } }), h('span', null, online.text)),
       row('启用 Zotero 工具', '关闭后 AI 看不到任何 Zotero 工具。', h(Switch, { checked: settings.zotero, disabled, label: '启用 Zotero 工具', onChange: value => { void change('zotero', value) } })),
-      row('允许修改文库', '开启后 AI 可以按 DOI / arXiv 编号添加文献、新建或追加笔记、增删标签、移入移出分类、新建分类；不会删除任何条目。需要 Zotero 10 或更高版本。每次修改 DSH 都会先询问你；第一次修改时 Zotero 自己也会弹窗确认，选“始终允许”后不再弹出。',
+      row('允许修改文库', '开启后 AI 可以按 DOI / arXiv 编号添加文献、新建或追加笔记、增删标签、移入移出分类、新建分类；不会删除任何条目。本机 Zotero 需要 10 或更高版本：每次修改 DSH 都会先询问你，第一次修改时 Zotero 自己也会弹窗确认（自动启动的 Zotero 在任务栏里），选“始终允许”后不再弹出。在线文库需要密钥有写入权限。',
         h(Switch, { checked: settings.zoteroWrite, disabled: disabled || !settings.zotero, label: '允许修改文库', onChange: value => { void change('zoteroWrite', value) } })),
+      h('div', { style: { display: 'grid', gap: 8 } },
+        h('div', { style: S.toggleText }, '文库来源', h('span', { style: { ...S.hint, fontWeight: 400 } }, '自动：优先用本机 Zotero（最全，含未同步的内容和本地 PDF）；它连不上、也启动不了时，如果填了下面的密钥，就改用 zotero.org 上已同步的文库。仅本机：从不联网访问文库。仅在线：不需要本机装有 Zotero。')),
+        h('div', { style: S.chips }, SOURCE_OPTIONS.map(([id, label]) => h('button', {
+          key: id, type: 'button', disabled: disabled || !settings.zotero, 'aria-pressed': settings.zoteroSource === id, onClick: () => { void change('zoteroSource', id) },
+          style: { ...S.secondary, ...(settings.zoteroSource === id ? chosen : {}) },
+        }, label))),
+      ),
+      row('自动启动 Zotero', 'AI 需要用到本机 Zotero 而它没有运行时，自动启动它并立刻最小化到任务栏（不抢焦点），大约十几秒后可用；用完不会关闭。Zotero 的“本地 API”开关仍需你事先在 Zotero 里开启一次。',
+        h(Switch, { checked: settings.zoteroAutoStart, disabled: disabled || !settings.zotero || settings.zoteroSource === 'cloud', label: '自动启动 Zotero', onChange: value => { void change('zoteroAutoStart', value) } })),
+      settings.zoteroAutoStart && settings.zoteroSource !== 'cloud' && status?.program === false
+        ? row('Zotero 程序路径', '没有在常见位置找到 Zotero。填写 zotero.exe（macOS 为 Zotero.app）的完整路径。', h(TextField, { value: settings.zoteroPath, disabled, placeholder: '自动查找', onCommit: value => { void change('zoteroPath', value) } }))
+        : null,
+      settings.zoteroSource === 'local' ? null
+        : row('zotero.org API 密钥', '在 zotero.org/settings/keys 新建密钥：勾选“Allow library access”，要读云端 PDF 再勾“Allow file access”，要让 AI 修改文库再勾“Allow write access”；访问群组文库需在 Default Group Permissions 里选择权限。密钥只发给 zotero.org。在线文库只包含已同步的内容；用 WebDAV 同步或没有开启文件同步时，PDF 全文读不到。',
+          h(TextField, { value: settings.zoteroApiKey, disabled, secret: true, placeholder: '未填写', onCommit: value => { void change('zoteroApiKey', value) } })),
       row('默认文库', '填 user 表示“我的文库”；群组文库填它的数字 ID（可以让 AI 列出群组）。', h(TextField, { value: settings.zoteroLibrary, disabled, placeholder: 'user', onCommit: value => { void change('zoteroLibrary', value || DEFAULTS.zoteroLibrary) } })),
       row('本地服务地址', 'Zotero 本地服务的地址，只接受本机地址。一般不用改。', h(TextField, { value: settings.zoteroBaseUrl, disabled, placeholder: DEFAULTS.zoteroBaseUrl, onCommit: value => { void change('zoteroBaseUrl', value || DEFAULTS.zoteroBaseUrl) } })),
     ),
