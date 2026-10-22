@@ -1,5 +1,6 @@
 # dsh-academic
 
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 [![npm](https://img.shields.io/npm/v/@copylee/dsh-academic)](https://www.npmjs.com/package/@copylee/dsh-academic)
 
 DeepSeek Harness 的学术插件，三部分：
