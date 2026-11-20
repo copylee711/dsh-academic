@@ -126,7 +126,7 @@ dsh plugin --profile web add @copylee/dsh-academic@latest
 | `zotero_browse` | 列出分类（树形路径）、标签、已存搜索、文库（个人文库与群组） |
 | `zotero_get` | 一个条目的全部元数据，以及它的笔记、附件、PDF 批注 |
 | `zotero_read` | 读文库中论文的正文：分段读取，或按问题返回最相关的段落 |
-| `zotero_export` | 导出 BibTeX / BibLaTeX / RIS / CSL JSON，或格式化的参考文献与文内引用 |
+| `zotero_export` | 导出 BibTeX / BibLaTeX / RIS / CSL JSON，或格式化的参考文献与文内引用。BibTeX 和 BibLaTeX 默认省略 `file` 附件路径字段，可用 `includeFile: true` 保留 |
 | `zotero_attachment` | 附件在本机的文件路径，或网页链接附件的 URL（路径只有本机 Zotero 能给出） |
 | `zotero_add` | 按 DOI / arXiv 编号入库（需开启写入） |
 | `zotero_note` | 新建或追加笔记（需开启写入） |

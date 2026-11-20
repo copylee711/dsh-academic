@@ -389,12 +389,13 @@ export function createReadTools(host: ZoteroHost): ToolDefinition[] {
       format: { type: 'string', required: true, enum: ['bibtex', 'biblatex', 'ris', 'csljson', 'bibliography', 'citation'], description: 'bibliography = formatted reference list entries; citation = in-text citations.' },
       style: { type: 'string', description: 'CSL style id for bibliography / citation, e.g. apa, ieee, nature, chicago-author-date, china-national-standard-gb-t-7714-2015-numeric. Zotero fetches a style it does not have from zotero.org/styles. Default from settings.' },
       locale: { type: 'string', description: 'Language of the style terms, e.g. en-US, zh-CN.' },
+      includeFile: { type: 'boolean', description: 'Keep attachment paths in BibTeX or BibLaTeX. Defaults to false.' },
     },
     output,
     isConcurrencySafe: () => true,
     timeoutMs: 60_000,
     async execute(args, exec): Promise<Value> {
-      const input = args as { refs: string[]; format: string; style?: string; locale?: string }
+      const input = args as { refs: string[]; format: string; style?: string; locale?: string; includeFile?: boolean }
       const refs = input.refs.slice(0, 50).map(ref => refOf(host, ref))
       if (refs.length === 0) throw new Error('refs is empty.')
       const groups = new Map<string, Ref[]>()
@@ -406,7 +407,14 @@ export function createReadTools(host: ZoteroHost): ToolDefinition[] {
         const itemKey = group.map(ref => ref.key).join(',')
         try {
           if (!formatted) {
-            blocks.push((await client.text(`${path}/items`, { itemKey, format: input.format }, exec.signal)).trim())
+            const response = await client.request(`${path}/items`, {
+              query: { itemKey, format: input.format }, signal: exec.signal, retryLocalTimeout: true,
+            })
+            // Zotero's BibTeX and BibLaTeX translators emit file as its own braced field.
+            const text = input.includeFile !== true && (input.format === 'bibtex' || input.format === 'biblatex')
+              ? response.text.replace(/^[ \t]*file[ \t]*=[ \t]*\{[^{}]*\},?[ \t]*(?:\r?\n|$)/gim, '')
+              : response.text
+            blocks.push(text.trim())
             continue
           }
           const items = (await client.json<Array<Item & { bib?: string; citation?: string }>>(`${path}/items`, { itemKey, format: 'json', include: input.format === 'citation' ? 'citation' : 'bib', style, ...(input.locale ? { locale: input.locale } : {}) }, exec.signal)).data

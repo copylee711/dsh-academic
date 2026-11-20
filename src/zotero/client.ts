@@ -17,12 +17,13 @@ import type { ZoteroSource } from '../settings.js'
 import type { Launcher } from './launch.js'
 
 export type ZoteroErrorCode =
-  | 'NOT_RUNNING' | 'API_DISABLED' | 'SERVER_CHANGED' | 'NOT_FOUND' | 'UNAUTHORIZED'
+  | 'NOT_RUNNING' | 'LOCAL_TIMEOUT' | 'API_DISABLED' | 'SERVER_CHANGED' | 'NOT_FOUND' | 'UNAUTHORIZED'
   | 'DENIED' | 'READ_ONLY' | 'CONFLICT' | 'BAD_REQUEST' | 'HTTP'
   | 'CLOUD_KEY' | 'CLOUD_DENIED' | 'CLOUD_UNREACHABLE' | 'RATE_LIMITED'
 
 const HINTS: Record<ZoteroErrorCode, string> = {
   NOT_RUNNING: 'Zotero is not running on this computer (or its local server is on another port). Ask the user to start Zotero.',
+  LOCAL_TIMEOUT: 'Zotero’s local API request timed out.',
   API_DISABLED: 'Zotero\'s local API is off. The user turns it on in Zotero: Settings > Advanced > "Allow other applications on this computer to communicate with Zotero".',
   SERVER_CHANGED: 'A different Zotero instance answered than before; refs and versions from earlier calls may not apply. Search again.',
   NOT_FOUND: 'Zotero has no such object.',
@@ -59,6 +60,8 @@ export interface ZoteroRequest {
   headers?: Record<string, string>
   signal?: AbortSignal | undefined
   timeoutMs?: number
+  /** Retry a timed-out local GET once before returning its error. */
+  retryLocalTimeout?: boolean
   /** Ask this side only, without starting Zotero or falling back. */
   via?: Via
 }
@@ -153,8 +156,13 @@ export class ZoteroClient {
     try {
       return await this.local(path, options)
     } catch (error) {
+      if (options.retryLocalTimeout && (options.method ?? 'GET') === 'GET'
+        && error instanceof ZoteroError && error.code === 'LOCAL_TIMEOUT') {
+        await this.delay(300, options.signal)
+        return await this.local(path, options)
+      }
       // A refused connection sent nothing, so the request can go out again. One that timed out may have arrived.
-      if (!(error instanceof ZoteroError) || error.code !== 'NOT_RUNNING' || error.status === 408) throw error
+      if (!(error instanceof ZoteroError) || error.code !== 'NOT_RUNNING') throw error
       const via = await this.recover(options.signal)
       return via === 'cloud' ? await this.cloud(path, options) : await this.local(path, options)
     }
@@ -210,6 +218,7 @@ export class ZoteroClient {
     if (method !== 'GET' && this.serverId !== undefined) headers['Zotero-Server-ID'] = this.serverId
     if (options.body !== undefined) headers['Content-Type'] = 'application/json'
     const timeout = AbortSignal.timeout(options.timeoutMs ?? 15_000)
+    const started = this.now()
     let response: Response
     try {
       response = await this.fetchImpl(url.href, {
@@ -221,7 +230,8 @@ export class ZoteroClient {
       })
     } catch (error) {
       if (options.signal?.aborted) throw error
-      throw timeout.aborted ? new ZoteroError('NOT_RUNNING', 'no answer in time', 408) : new ZoteroError('NOT_RUNNING')
+      if (timeout.aborted) throw new ZoteroError('LOCAL_TIMEOUT', `no answer from ${url.origin} after ${String(this.now() - started)} ms`, 408)
+      throw new ZoteroError('NOT_RUNNING')
     }
     this.via = 'local'
     this.version = response.headers.get('X-Zotero-Version') ?? this.version
@@ -231,7 +241,15 @@ export class ZoteroClient {
       this.serverId = serverId
       if (changed) this.onServerChange()
     }
-    const text = new TextDecoder().decode(await readBounded(response, MAX_BYTES))
+    let text: string
+    try {
+      text = new TextDecoder().decode(await readBounded(response, MAX_BYTES))
+    } catch (error) {
+      if (timeout.aborted && !options.signal?.aborted) {
+        throw new ZoteroError('LOCAL_TIMEOUT', `incomplete response from ${url.origin} after ${String(this.now() - started)} ms`, 408)
+      }
+      throw error
+    }
     if (response.status >= 200 && response.status < 300) return { status: response.status, headers: response.headers, text }
     const detail = text.trim().slice(0, 300) || undefined
     switch (response.status) {
@@ -354,7 +372,7 @@ export class ZoteroClient {
       return { running: true, writable: this.serverId !== undefined, ...(this.serverId === undefined ? {} : { serverId: this.serverId }), ...(this.version === undefined ? {} : { version: this.version }) }
     } catch (error) {
       if (signal?.aborted) throw error
-      return { running: !(error instanceof ZoteroError && error.code === 'NOT_RUNNING'), writable: false, error: error instanceof Error ? error.message : String(error) }
+      return { running: !(error instanceof ZoteroError && (error.code === 'NOT_RUNNING' || error.code === 'LOCAL_TIMEOUT')), writable: false, error: error instanceof Error ? error.message : String(error) }
     }
   }
 }

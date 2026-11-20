@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createHttp } from '../src/net/http.js'
 import { ZoteroWriter, type KeyStore } from '../src/zotero/auth.js'
-import { ZoteroError } from '../src/zotero/client.js'
+import { ZoteroClient, ZoteroError } from '../src/zotero/client.js'
 import { bestAttachment, createReadTools } from '../src/zotero/tools.js'
 import { createWriteTools } from '../src/zotero/write-tools.js'
 import { fakeZotero, item, run, SERVER_ID, settings, type Reply, type Seen } from './helpers.js'
@@ -131,6 +131,34 @@ describe('reading', () => {
     const bib = await run(tools, 'zotero_export', { refs: ['PAPER001'], format: 'bibliography' })
     expect(bib).toContain('(bibliography, style ieee):\nVaswani, A. (2017). Attention.')
     expect(seen.at(-1)!.query.get('style')).toBe('ieee')
+  })
+  it.each(['bibtex', 'biblatex'])('omits attachment paths from %s unless requested', async format => {
+    const body = '@article{key,\r\n\ttitle = {Attention},\r\n\tfile = {PDF:/Users/test/Zotero/\r\na.pdf:application/pdf},\r\n}\r\n'
+    const { client } = fakeZotero(() => ({ body }))
+    const tools = createReadTools({ client, settings: settings() })
+    const args = { refs: ['PAPER001'], format }
+    expect(await run(tools, 'zotero_export', args)).toContain('@article{key,\r\n\ttitle = {Attention},\r\n}')
+    expect(await run(tools, 'zotero_export', { ...args, includeFile: true })).toContain(body.trim())
+  })
+  it('retries the export after a local request timeout', async () => {
+    const timeout = new DOMException('timed out', 'TimeoutError')
+    const stub = vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(AbortSignal.abort(timeout))
+    const { fetchImpl, seen } = fakeZotero(library)
+    const fetchWithTimeout = vi.fn(async (...args: Parameters<typeof fetchImpl>) => {
+      args[1]?.signal?.throwIfAborted()
+      return await fetchImpl(...args)
+    })
+    const delay = vi.fn(async () => {})
+    const client = new ZoteroClient(() => 'http://127.0.0.1:23119', fetchWithTimeout, undefined, { delay })
+    const tools = createReadTools({ client, settings: settings() })
+    try {
+      expect(await run(tools, 'zotero_export', { refs: ['PAPER001'], format: 'bibtex' })).toContain('@article{vaswani_attention_2017,')
+      expect(fetchWithTimeout).toHaveBeenCalledTimes(2)
+      expect(delay).toHaveBeenCalledTimes(1)
+      expect(seen.map(request => request.path)).toEqual(['users/0/items'])
+    } finally {
+      stub.mockRestore()
+    }
   })
   it('lists collections as paths', async () => {
     const { tools } = setup()
