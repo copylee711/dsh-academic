@@ -1,7 +1,8 @@
 {
   "name": "@copylee/dsh-academic",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "DeepSeek Harness 学术插件：连接本机或在线的 Zotero 文库；多源论文检索（arXiv、OpenAlex、Crossref、PubMed、知网、Google Scholar 等）、阅读开放获取全文、获取引文、核验参考文献；内置文献综述、论文精读、写作润色、模拟审稿等学术技能。",
+  "icon": "assets/icon.svg",
   "type": "module",
   "author": "copylee",
   "repository": {
@@ -23,9 +24,12 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
+    "locale/*.json",
+    "assets/icon.svg",
     "lib/*.js",
     "lib/*.mjs",
     "lib/types/**/*.d.ts",
